@@ -35,6 +35,7 @@ export interface RiskEnvironment {
   readonly equity: number;
   readonly state: RiskState;
   readonly killSwitch: KillSwitchLevel;
+  readonly mode?: string;
 }
 
 /**
@@ -92,7 +93,8 @@ export function evaluateRisk(
   cfg: RiskConfig,
   env: RiskEnvironment,
   setup: Setup,
-  direction: Direction
+  direction: Direction,
+  mode?: string
 ): RiskDecision {
   const reasons: string[] = [];
   const breaches = evaluateBreaches(cfg, env.state);
@@ -100,8 +102,15 @@ export function evaluateRisk(
   let killSwitchLevel: KillSwitchLevel = env.killSwitch;
   if (levelRank(envLevel) > levelRank(killSwitchLevel)) killSwitchLevel = envLevel;
 
-  if (killSwitchLevel === "L3") reasons.push("kill switch L3 active — full halt");
-  else if (killSwitchLevel === "L2") reasons.push("kill switch L2 active — new entries halted");
+  const effectiveMode = mode ?? env.mode;
+
+  if (killSwitchLevel === "L3") {
+    reasons.push("kill switch L3 active — full halt");
+  } else if (killSwitchLevel === "L2") {
+    if (effectiveMode !== "ANALYSIS_ONLY") {
+      reasons.push("kill switch L2 active — new entries halted");
+    }
+  }
 
   if (breaches.maxOpenTradesExceeded) reasons.push(`max open trades ${env.state.openTrades}/${cfg.maxOpenTrades}`);
   if (breaches.netExposureExceeded) reasons.push(`net exposure ${env.state.netExposureLots.toFixed(2)}/${cfg.netExposureMax}`);

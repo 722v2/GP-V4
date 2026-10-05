@@ -62,6 +62,11 @@ export function buildApp(cfg: AppConfig, log: Logger = createConsoleLogger("gp")
   const repo = buildRepository(cfg, log);
   const telegram = new TelegramNotifier(cfg.telegram, log.child("telegram"));
 
+  const idempotency = new IdempotencyGuard();
+  const killSwitch = new KillSwitch(async (state) => {
+    log.warn(`kill switch changed to ${state.level}`, { reason: state.reason, by: state.updatedBy });
+  });
+
   const riskConfig: RiskConfig = {
     perTradePct: cfg.risk.perTradePct,
     dailyLossCapPct: cfg.risk.dailyLossCapPct,
@@ -75,13 +80,10 @@ export function buildApp(cfg: AppConfig, log: Logger = createConsoleLogger("gp")
   const riskEnv = (): RiskEnvironment => ({
     equity: riskConfig.accountEquity,
     state: DEFAULT_RISK_STATE,
-    killSwitch: "NONE",
+    killSwitch: killSwitch.level,
+    mode: cfg.mode,
   });
 
-  const idempotency = new IdempotencyGuard();
-  const killSwitch = new KillSwitch(async (state) => {
-    log.warn(`kill switch changed to ${state.level}`, { reason: state.reason, by: state.updatedBy });
-  });
   const pipeline = new TradingPipeline({
     bus,
     cache,

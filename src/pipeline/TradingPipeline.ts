@@ -103,7 +103,15 @@ export class TradingPipeline {
       return { ...base, setup, ai: aiResult, risk: null, action: { kind: "AI_BLOCKED" }, reasons: [`AI unavailable: ${aiResult.failure.kind}`] };
     }
 
-    const risk = evaluateRisk(this.deps.riskConfig, this.deps.riskEnv(), setup, setup.direction);
+    const currentEnv = this.deps.riskEnv();
+    const effectiveKillSwitch = this.deps.killSwitch ? this.deps.killSwitch.level : currentEnv.killSwitch;
+    const env: RiskEnvironment = {
+      ...currentEnv,
+      killSwitch: effectiveKillSwitch,
+      mode: currentEnv.mode ?? mode,
+    };
+
+    const risk = evaluateRisk(this.deps.riskConfig, env, setup, setup.direction, mode);
     await bus.publish({
       name: risk.verdict === "APPROVED" ? "risk.approved" : "risk.rejected",
       timestamp: this.now(),
@@ -124,31 +132,6 @@ export class TradingPipeline {
     mode: Mode
   ): Promise<CycleOutcome> {
     const { bus, repo, telegram, log } = this.deps;
-    const kill = this.deps.killSwitch;
-    if (kill && kill.level === "L3") {
-      return {
-        symbol: setup.symbol,
-        timeframe: setup.timeframe,
-        barOpenTime: setup.barOpenTime,
-        setup,
-        ai: aiResult,
-        risk: null,
-        action: { kind: "RISK_REJECTED" },
-        reasons: ["kill switch L3 — full halt"],
-      };
-    }
-    if (kill && kill.level === "L2" && isSimulated(mode)) {
-      return {
-        symbol: setup.symbol,
-        timeframe: setup.timeframe,
-        barOpenTime: setup.barOpenTime,
-        setup,
-        ai: aiResult,
-        risk: null,
-        action: { kind: "RISK_REJECTED" },
-        reasons: ["kill switch L2 — new entries halted"],
-      };
-    }
     const base: Pick<CycleOutcome, "symbol" | "timeframe" | "barOpenTime"> = {
       symbol: setup.symbol,
       timeframe: setup.timeframe,

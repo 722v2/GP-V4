@@ -275,21 +275,48 @@ describe("TradingPipeline", () => {
   it("kill switch L3 blocks all order origination", async () => {
     const ks = new KillSwitch(async () => {});
     await ks.escalate("L3", "daily loss cap");
-    const { pipeline, cache } = makePipeline(aiApproves(), "PAPER_TRADING", { openTrades: 0 }, { killSwitch: ks });
+    const { pipeline, cache, events } = makePipeline(aiApproves(), "PAPER_TRADING", { openTrades: 0 }, { killSwitch: ks });
     cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
     const out = await pipeline.onBarClosed("XAUUSD", "M5");
     expect(out.action.kind).toBe("RISK_REJECTED");
     expect(out.reasons[0]).toMatch(/L3/);
+    expect(events).not.toContain("risk.approved");
+    expect(events).toContain("risk.rejected");
   });
 
-  it("kill switch L2 blocks simulated entries", async () => {
+  it("kill switch L2 blocks simulated entries and auto trading, but allows ANALYSIS_ONLY", async () => {
     const ks = new KillSwitch(async () => {});
     await ks.escalate("L2", "max open trades");
-    const { pipeline, cache } = makePipeline(aiApproves(), "PAPER_TRADING", { openTrades: 0 }, { killSwitch: ks });
-    cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
-    const out = await pipeline.onBarClosed("XAUUSD", "M5");
-    expect(out.action.kind).toBe("RISK_REJECTED");
-    expect(out.reasons[0]).toMatch(/L2/);
+
+    // PAPER_TRADING is blocked
+    const paper = makePipeline(aiApproves(), "PAPER_TRADING", { openTrades: 0 }, { killSwitch: ks });
+    paper.cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
+    const paperOut = await paper.pipeline.onBarClosed("XAUUSD", "M5");
+    expect(paperOut.action.kind).toBe("RISK_REJECTED");
+    expect(paperOut.reasons[0]).toMatch(/L2/);
+    expect(paper.events).not.toContain("risk.approved");
+    expect(paper.events).toContain("risk.rejected");
+
+    // AUTO_TRADING is blocked
+    const auto = makePipeline(aiApproves(), "AUTO_TRADING", { openTrades: 0 }, { killSwitch: ks });
+    auto.cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
+    const autoOut = await auto.pipeline.onBarClosed("XAUUSD", "M5");
+    expect(autoOut.action.kind).toBe("RISK_REJECTED");
+    expect(autoOut.reasons[0]).toMatch(/L2/);
+
+    // MANUAL_CONFIRMATION is blocked
+    const manual = makePipeline(aiApproves(), "MANUAL_CONFIRMATION", { openTrades: 0 }, { killSwitch: ks });
+    manual.cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
+    const manualOut = await manual.pipeline.onBarClosed("XAUUSD", "M5");
+    expect(manualOut.action.kind).toBe("RISK_REJECTED");
+    expect(manualOut.reasons[0]).toMatch(/L2/);
+
+    // ANALYSIS_ONLY is NOT blocked
+    const analysis = makePipeline(aiApproves(), "ANALYSIS_ONLY", { openTrades: 0 }, { killSwitch: ks });
+    analysis.cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
+    const analysisOut = await analysis.pipeline.onBarClosed("XAUUSD", "M5");
+    expect(analysisOut.action.kind).toBe("ANALYSIS");
+    expect(analysis.events).toContain("risk.approved");
   });
 
   it("idempotency guard blocks duplicate bar processing", async () => {

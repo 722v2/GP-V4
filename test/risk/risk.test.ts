@@ -106,6 +106,24 @@ describe("evaluateRisk", () => {
     expect(d.killSwitchLevel).toBe("L3");
   });
 
+  it("L2 kill switch blocks execution modes but allows ANALYSIS_ONLY", () => {
+    const l2Env: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "L2" };
+    const execDecision = evaluateRisk(CFG, l2Env, LONG_SETUP, "LONG", "PAPER_TRADING");
+    expect(execDecision.verdict).toBe("REJECTED");
+    expect(execDecision.reasons).toContain("kill switch L2 active — new entries halted");
+
+    const analysisDecision = evaluateRisk(CFG, l2Env, LONG_SETUP, "LONG", "ANALYSIS_ONLY");
+    expect(analysisDecision.verdict).toBe("APPROVED");
+    expect(analysisDecision.killSwitchLevel).toBe("L2");
+  });
+
+  it("L3 kill switch blocks even in ANALYSIS_ONLY mode", () => {
+    const l3Env: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "L3" };
+    const d = evaluateRisk(CFG, l3Env, LONG_SETUP, "LONG", "ANALYSIS_ONLY");
+    expect(d.verdict).toBe("REJECTED");
+    expect(d.reasons).toContain("kill switch L3 active — full halt");
+  });
+
   it("rejects an inverted stop for the direction", () => {
     const bad = { ...LONG_SETUP, stopLoss: 2010 };
     const d = evaluateRisk(CFG, CLEAN_ENV, bad, "LONG");
