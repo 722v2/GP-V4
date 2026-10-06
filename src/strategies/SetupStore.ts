@@ -1,4 +1,11 @@
 import type { Setup, SetupState } from "../core/types/Setup.js";
+import type { Symbol, Timeframe } from "../core/types/MarketTypes.js";
+import { TIMEFRAME_MS } from "../core/types/MarketTypes.js";
+
+export interface ExpiryResult {
+  readonly expired: readonly Setup[];
+  readonly cleanedCount: number;
+}
 
 /**
  * In-memory setup store with lifecycle transitions and idempotency keyed on
@@ -27,6 +34,10 @@ export class SetupStore {
     return this.all().filter((s) => s.state === state);
   }
 
+  get count(): number {
+    return this.setups.size;
+  }
+
   /** Legal state machine: NEW→ACTIVE→(UPDATED|TRIGGERED|EXPIRED|INVALIDATED)→CLOSED. */
   private transitions: Record<SetupState, readonly SetupState[]> = {
     NEW: ["ACTIVE", "EXPIRED", "INVALIDATED"],
@@ -47,7 +58,73 @@ export class SetupStore {
     return next;
   }
 
+  /**
+   * Evaluates active non-terminal setups for the given symbol and timeframe.
+   * Expire-eligible setups transition to EXPIRED exactly once.
+   * Terminal setups (EXPIRED, INVALIDATED, TRIGGERED, CLOSED) are then removed
+   * from the active in-memory collection.
+   */
+  expireAndCleanup(
+    symbol: Symbol | string,
+    timeframe: Timeframe,
+    currentBarOpenTime: number,
+    expiryBars: number
+  ): ExpiryResult {
+    const effectiveExpiryBars =
+      Number.isFinite(expiryBars) && expiryBars >= 0 ? expiryBars : 6;
+
+    const tfMs = TIMEFRAME_MS[timeframe as Timeframe];
+    const expired: Setup[] = [];
+
+    if (tfMs && tfMs > 0) {
+      for (const setup of this.setups.values()) {
+        if (setup.symbol !== symbol || setup.timeframe !== timeframe) {
+          continue;
+        }
+
+        // Expiry applies ONLY to non-terminal active setups (NEW, ACTIVE, UPDATED)
+        if (setup.state === "NEW" || setup.state === "ACTIVE" || setup.state === "UPDATED") {
+          const elapsedBars = Math.floor((currentBarOpenTime - setup.barOpenTime) / tfMs);
+          if (elapsedBars >= effectiveExpiryBars) {
+            const transitioned = this.transition(setup.id, "EXPIRED");
+            if (transitioned) {
+              expired.push(transitioned);
+            }
+          }
+        }
+      }
+    }
+
+    // Clean terminal setups from active in-memory collection
+    let cleanedCount = 0;
+    for (const [id, setup] of this.setups.entries()) {
+      if (
+        setup.state === "EXPIRED" ||
+        setup.state === "INVALIDATED" ||
+        setup.state === "CLOSED" ||
+        setup.state === "TRIGGERED"
+      ) {
+        this.setups.delete(id);
+        cleanedCount += 1;
+      }
+    }
+
+    return { expired, cleanedCount };
+  }
+
   clear(): void {
     this.setups.clear();
+  }
+
+  /**
+   * Restores active, non-terminal setups from persistence.
+   * Never resurrects terminal setups (TRIGGERED, EXPIRED, INVALIDATED, CLOSED).
+   */
+  restore(setups: readonly Setup[]): void {
+    for (const s of setups) {
+      if (s.state === "NEW" || s.state === "ACTIVE" || s.state === "UPDATED") {
+        this.setups.set(s.id, s);
+      }
+    }
   }
 }

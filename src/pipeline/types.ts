@@ -49,7 +49,10 @@ export type CycleAction =
   | { readonly kind: "NO_SETUP" }
   | { readonly kind: "AI_BLOCKED" } // AI returned NO_TRADE / WATCH or failed
   | { readonly kind: "RISK_REJECTED" }
+  | { readonly kind: "FILTER_BLOCKED"; readonly filterName: string }
   | { readonly kind: "CANDIDATE" } // approved, awaiting mode-specific handling
   | { readonly kind: "EXECUTED_SIMULATED"; readonly lotSize: number }
+  | { readonly kind: "EXECUTED_BROKER"; readonly orderId?: string; readonly lotSize: number }
+  | { readonly kind: "EXECUTION_REJECTED"; readonly reason?: string }
   | { readonly kind: "AWAITING_CONFIRMATION" }
   | { readonly kind: "ANALYSIS"; readonly note: string };

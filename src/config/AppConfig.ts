@@ -24,8 +24,14 @@ export const AppConfigSchema = z.object({
     baseUrl: z.string().url().or(z.literal("")),
     apiKey: z.string(),
     model: z.string(),
+    m5Model: z.string().default(""),
     timeoutMs: z.number().int().positive(),
-    maxRetries: z.number().int().min(0).max(3),
+    m5TimeoutMs: z.number().int().positive().default(15_000),
+    maxRetries: z.number().int().min(0).max(5),
+    retryInitialDelayMs: z.number().int().nonnegative().default(500),
+    retryMaxDelayMs: z.number().int().nonnegative().default(4000),
+    minConfidence: z.number().min(0).max(1).default(0.6),
+    levelTolerancePts: z.number().nonnegative().default(1.0),
     hourlyBudgetUsd: z.number().positive(),
     dailyBudgetUsd: z.number().positive(),
     cacheTtlMs: z.number().int().positive(),
@@ -44,6 +50,8 @@ export const AppConfigSchema = z.object({
 
   risk: z.object({
     perTradePct: z.number().positive(),
+    minRiskPerTradePct: z.number().positive().optional().default(0.01),
+    maxRiskPerTradePct: z.number().positive().optional().default(5.0),
     dailyLossCapPct: z.number().positive(),
     weeklyLossCapPct: z.number().positive(),
     maxDrawdownPct: z.number().positive(),
@@ -51,6 +59,9 @@ export const AppConfigSchema = z.object({
     netExposureMax: z.number().positive(),
     marginCeilingPct: z.number().positive(),
     accountEquity: z.number().positive(),
+    minStopDistancePts: z.number().nonnegative().optional().default(1.0),
+    maxStopDistancePts: z.number().positive().optional().default(50.0),
+    maxLot: z.number().positive().optional().default(10.0),
   }),
 
   execution: z.object({
@@ -59,6 +70,22 @@ export const AppConfigSchema = z.object({
     slippagePoints: z.number().min(0),
     latencyMs: z.number().min(0),
   }),
+
+  strategyExpiryBars: z.number().int().nonnegative().optional().default(6),
+
+  persistenceMaxRetries: z.number().int().nonnegative().optional().default(3),
+  persistenceInitialRetryDelayMs: z.number().int().positive().optional().default(500),
+  persistenceMaxRetryDelayMs: z.number().int().positive().optional().default(4000),
+  persistenceAlertCooldownMs: z.number().int().nonnegative().optional().default(60_000),
+
+  marketFilters: z.object({
+    sessionFilterEnabled: z.boolean().default(false),
+    allowedSessions: z.array(z.enum(["ASIA", "LONDON", "NEW_YORK"])).default(["LONDON", "NEW_YORK"]),
+    spreadFilterEnabled: z.boolean().default(false),
+    maxSpreadPoints: z.number().nonnegative().default(1.0),
+    newsFilterEnabled: z.boolean().default(false),
+    newsWindowMinutes: z.number().nonnegative().default(30),
+  }).default({}),
 
   fixturesDir: z.string().default("./fixtures"),
 
@@ -70,6 +97,14 @@ export const AppConfigSchema = z.object({
     strongCandleStrategy: z.boolean().default(true),
     dashboardEnabled: z.boolean().default(false),
   }),
+
+  mt5: z.object({
+    enabled: z.boolean().default(false),
+    bridgeUrl: z.string().url().or(z.literal("")).default(""),
+    brokerSymbolXauusd: z.string().default("XAUUSD"),
+    accountId: z.string().default(""),
+    server: z.string().default(""),
+  }).default({}),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 

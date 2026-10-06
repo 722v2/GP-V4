@@ -17,6 +17,7 @@ export const EVENT_NAMES = [
   "killswitch.changed",
   "health.degraded",
   "health.recovered",
+  "persistence.failed",
   "system.error",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];

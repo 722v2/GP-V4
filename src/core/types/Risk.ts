@@ -20,6 +20,15 @@ export interface RiskDecision {
   readonly riskAmount: number;
   readonly reasons: readonly string[];
   readonly killSwitchLevel: KillSwitchLevel;
+
+  // Position sizing audit and debugging fields (P2-15)
+  readonly equityUsed?: number;
+  readonly riskPercent?: number;
+  readonly riskBudgetUsd?: number;
+  readonly stopDistance?: number;
+  readonly spreadCostUsd?: number;
+  readonly rawLotSize?: number;
+  readonly maxLot?: number;
 }
 
 export const KILL_SWITCH_LEVELS = ["NONE", "L1", "L2", "L3"] as const;

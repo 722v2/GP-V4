@@ -44,32 +44,51 @@ export class LiquidityEngine implements AnalysisEngine {
     const evidence = [];
     const levels: EngineLevel[] = [];
 
-    const equalHighs = equalLevels(swings.filter((s) => s.kind === "swing-high"), this.cfg.equalLevelTolerance);
-    const equalLows = equalLevels(swings.filter((s) => s.kind === "swing-low"), this.cfg.equalLevelTolerance);
-    for (const eh of equalHighs) levels.push({ price: eh, kind: "equal-high", touchedAt: last.openTime });
-    for (const el of equalLows) levels.push({ price: el, kind: "equal-low", touchedAt: last.openTime });
+    const equalHighClusters = detectEqualLevelClusters(
+      swings.filter((s) => s.kind === "swing-high"),
+      this.cfg.equalLevelTolerance
+    );
+    const equalLowClusters = detectEqualLevelClusters(
+      swings.filter((s) => s.kind === "swing-low"),
+      this.cfg.equalLevelTolerance
+    );
 
-    if (equalHighs.length > 0) {
-      const upper = Math.min(...equalHighs);
-      if (upper - last.close <= this.cfg.nearLevelAtrMultiple * atr) {
-        evidence.push({
-          source: "liquidity",
-          kind: "equal-highs-overhead",
-          detail: `equal highs near ${upper.toFixed(2)} — resting liquidity above`,
-          weight: signedWeight("SHORT", 0.4),
-        });
-      }
+    for (const eh of equalHighClusters) levels.push({ price: eh.price, kind: "equal-high", touchedAt: eh.timestamp });
+    for (const el of equalLowClusters) levels.push({ price: el.price, kind: "equal-low", touchedAt: el.timestamp });
+
+    // Directional validity & ATR proximity:
+    // Upside liquidity target: level must be strictly ABOVE current price (last.close)
+    // and within ATR proximity (upper.price - last.close <= nearLevelAtrMultiple * atr).
+    // When multiple valid levels exist, select the NEWEST valid level (deterministic tie-breaking by price).
+    const validHighs = equalHighClusters
+      .filter((c) => c.price > last.close && c.price - last.close <= this.cfg.nearLevelAtrMultiple * atr)
+      .sort((a, b) => b.timestamp - a.timestamp || a.price - b.price);
+
+    if (validHighs.length > 0) {
+      const upper = validHighs[0]!;
+      evidence.push({
+        source: "liquidity",
+        kind: "equal-highs-overhead",
+        detail: `equal highs near ${upper.price.toFixed(2)} — resting liquidity above`,
+        weight: signedWeight("SHORT", 0.4),
+      });
     }
-    if (equalLows.length > 0) {
-      const lower = Math.max(...equalLows);
-      if (last.close - lower <= this.cfg.nearLevelAtrMultiple * atr) {
-        evidence.push({
-          source: "liquidity",
-          kind: "equal-lows-below",
-          detail: `equal lows near ${lower.toFixed(2)} — resting liquidity below`,
-          weight: signedWeight("LONG", 0.4),
-        });
-      }
+
+    // Downside liquidity target: level must be strictly BELOW current price (last.close)
+    // and within ATR proximity (last.close - lower.price <= nearLevelAtrMultiple * atr).
+    // When multiple valid levels exist, select the NEWEST valid level (deterministic tie-breaking by price).
+    const validLows = equalLowClusters
+      .filter((c) => c.price < last.close && last.close - c.price <= this.cfg.nearLevelAtrMultiple * atr)
+      .sort((a, b) => b.timestamp - a.timestamp || b.price - a.price);
+
+    if (validLows.length > 0) {
+      const lower = validLows[0]!;
+      evidence.push({
+        source: "liquidity",
+        kind: "equal-lows-below",
+        detail: `equal lows near ${lower.price.toFixed(2)} — resting liquidity below`,
+        weight: signedWeight("LONG", 0.4),
+      });
     }
 
     const sweep = detectSweep(candles, swings);
@@ -86,11 +105,24 @@ export class LiquidityEngine implements AnalysisEngine {
   }
 }
 
-/** Averages swing prices that cluster within `tolerance`; returns cluster mid prices. */
-export function equalLevels(swings: readonly SwingPoint[], tolerance: number): number[] {
+export interface EqualLevelCluster {
+  readonly price: number;
+  readonly timestamp: number;
+  readonly swings: readonly SwingPoint[];
+}
+
+/**
+ * Groups swing points that cluster within `tolerance`.
+ * Returns each cluster's average price, the latest swing openTime (when the cluster was formed),
+ * and the constituent swings.
+ */
+export function detectEqualLevelClusters(
+  swings: readonly SwingPoint[],
+  tolerance: number
+): EqualLevelCluster[] {
   if (swings.length < 2) return [];
   const sorted = [...swings].sort((a, b) => a.price - b.price);
-  const out: number[] = [];
+  const out: EqualLevelCluster[] = [];
   let cluster: SwingPoint[] = [sorted[0]!];
   for (let i = 1; i < sorted.length; i++) {
     const s = sorted[i]!;
@@ -98,12 +130,29 @@ export function equalLevels(swings: readonly SwingPoint[], tolerance: number): n
     if (s.price - clusterTop <= tolerance) {
       cluster.push(s);
     } else {
-      if (cluster.length >= 2) out.push(cluster.reduce((a, s2) => a + s2.price, 0) / cluster.length);
+      if (cluster.length >= 2) {
+        out.push({
+          price: cluster.reduce((a, s2) => a + s2.price, 0) / cluster.length,
+          timestamp: Math.max(...cluster.map((s2) => s2.openTime)),
+          swings: [...cluster],
+        });
+      }
       cluster = [s];
     }
   }
-  if (cluster.length >= 2) out.push(cluster.reduce((a, s2) => a + s2.price, 0) / cluster.length);
+  if (cluster.length >= 2) {
+    out.push({
+      price: cluster.reduce((a, s2) => a + s2.price, 0) / cluster.length,
+      timestamp: Math.max(...cluster.map((s2) => s2.openTime)),
+      swings: [...cluster],
+    });
+  }
   return out;
+}
+
+/** Averages swing prices that cluster within `tolerance`; returns cluster mid prices. */
+export function equalLevels(swings: readonly SwingPoint[], tolerance: number): number[] {
+  return detectEqualLevelClusters(swings, tolerance).map((c) => c.price);
 }
 
 export interface Sweep {

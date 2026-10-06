@@ -6,3 +6,5 @@ coverage/
 !.env.example
 *.log
 fixtures/
+data/
+*.json.bak

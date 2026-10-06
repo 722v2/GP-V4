@@ -3,6 +3,7 @@ import type { Direction } from "../core/types/Setup.js";
 import type { TradePlan, TradeState } from "../core/types/Trade.js";
 import type { RiskConfig } from "../risk/RiskEngine.js";
 import { evaluateRisk } from "../risk/RiskEngine.js";
+import { RiskStateTracker } from "../risk/RiskStateTracker.js";
 import { ConfluenceEngine } from "../strategies/ConfluenceEngine.js";
 import { StrongCandleStrategy } from "../strategies/StrongCandleStrategy.js";
 import { SetupStore } from "../strategies/SetupStore.js";
@@ -10,26 +11,111 @@ import { StructureEngine } from "../strategies/engines/StructureEngine.js";
 import { LiquidityEngine } from "../strategies/engines/LiquidityEngine.js";
 import { PriceActionEngine } from "../strategies/engines/PriceActionEngine.js";
 import type { RiskEnvironment } from "../risk/RiskEngine.js";
+import {
+  SpreadSlippageModel,
+  TradeLifecycle,
+  type TradeLifecycleState,
+  isTerminal,
+} from "../execution/TradeLifecycle.js";
 
-/**
- * Models the spread, slippage, and latency that separate a paper fill from a
- * theoretical one. LONG entries pay up (fill above mid), SHORT entries fill below.
- */
-export class SpreadSlippageModel {
-  constructor(
-    private readonly spreadPoints: number,
-    private readonly slippagePoints: number,
-    private readonly latencyMs: number
-  ) {}
+export { SpreadSlippageModel, TradeLifecycle, type TradeLifecycleState, isTerminal };
 
-  get latency(): number {
-    return this.latencyMs;
+export interface BacktestPerformanceMetrics {
+  readonly totalTrades: number;
+  readonly winningTrades: number;
+  readonly losingTrades: number;
+  readonly evenTrades: number;
+  readonly winRate: number;
+  readonly grossProfit: number;
+  readonly grossLoss: number;
+  readonly netProfit: number;
+  readonly profitFactor: number | null;
+  readonly expectancy: number;
+  readonly maxDrawdown: number;
+  readonly maxDrawdownPct: number;
+}
+
+export function calculatePerformanceMetrics(
+  closedTrades: readonly TradeLifecycleState[],
+  initialEquity: number
+): BacktestPerformanceMetrics {
+  const totalTrades = closedTrades.length;
+  let winningTrades = 0;
+  let losingTrades = 0;
+  let evenTrades = 0;
+  let grossProfit = 0;
+  let grossLoss = 0;
+
+  for (const trade of closedTrades) {
+    const pnl = trade.realizedPnl ?? 0;
+    if (!Number.isFinite(pnl)) {
+      evenTrades += 1;
+      continue;
+    }
+    if (pnl > 0) {
+      winningTrades += 1;
+      grossProfit += pnl;
+    } else if (pnl < 0) {
+      losingTrades += 1;
+      grossLoss += Math.abs(pnl);
+    } else {
+      evenTrades += 1;
+    }
   }
 
-  adjustedFill(direction: Direction, price: number): number {
-    const cost = this.spreadPoints + this.slippagePoints;
-    return direction === "LONG" ? price + cost : price - cost;
+  const netProfit = grossProfit - grossLoss;
+  const winRate = totalTrades > 0 ? winningTrades / totalTrades : 0;
+  const expectancy = totalTrades > 0 ? netProfit / totalTrades : 0;
+
+  let profitFactor: number | null = null;
+  if (grossLoss > 0) {
+    profitFactor = grossProfit / grossLoss;
+  } else if (grossProfit > 0) {
+    profitFactor = null;
+  } else {
+    profitFactor = null;
   }
+
+  let currentEquity = initialEquity;
+  let peakEquity = initialEquity;
+  let maxDrawdown = 0;
+  let maxDrawdownPct = 0;
+
+  const sortedTrades = [...closedTrades].sort(
+    (a, b) => (a.closedAt ?? a.openedAt ?? 0) - (b.closedAt ?? b.openedAt ?? 0)
+  );
+
+  for (const trade of sortedTrades) {
+    const pnl = trade.realizedPnl ?? 0;
+    if (Number.isFinite(pnl)) {
+      currentEquity += pnl;
+      if (currentEquity > peakEquity) {
+        peakEquity = currentEquity;
+      }
+      const dd = peakEquity - currentEquity;
+      if (dd > maxDrawdown) {
+        maxDrawdown = dd;
+        if (peakEquity > 0) {
+          maxDrawdownPct = (maxDrawdown / peakEquity) * 100;
+        }
+      }
+    }
+  }
+
+  return {
+    totalTrades,
+    winningTrades,
+    losingTrades,
+    evenTrades,
+    winRate: Math.round(winRate * 10000) / 10000,
+    grossProfit: Math.round(grossProfit * 100) / 100,
+    grossLoss: Math.round(grossLoss * 100) / 100,
+    netProfit: Math.round(netProfit * 100) / 100,
+    profitFactor: profitFactor !== null ? Math.round(profitFactor * 100) / 100 : null,
+    expectancy: Math.round(expectancy * 100) / 100,
+    maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+    maxDrawdownPct: Math.round(maxDrawdownPct * 100) / 100,
+  };
 }
 
 /** Append-only candle store that preserves temporal ordering for replay. */
@@ -66,77 +152,6 @@ export class BacktestStore {
   readonly lifecycles: TradeLifecycleState[] = [];
 }
 
-export interface TradeLifecycleState {
-  readonly planId: string;
-  readonly direction: Direction;
-  readonly entry: number;
-  readonly stopLoss: number;
-  readonly takeProfit1: number;
-  readonly takeProfit2: number;
-  readonly lotSize: number;
-  state: TradeState;
-  openedAt?: number;
-  closedAt?: number;
-  realizedPnl?: number;
-  exitReason?: string;
-}
-
-function isTerminal(state: TradeState): boolean {
-  return state === "TP2_HIT" || state === "SL_HIT" || state === "MANUALLY_CLOSED" || state === "REJECTED" || state === "EXPIRED";
-}
-
-/**
- * Advances a single position bar-by-bar using intrabar extremes. LONG stops and
- * targets are checked against low/high; SHORT reversed. Conservative ordering
- * (stop before target when both are inside one bar) avoids lookahead bias.
- */
-export class TradeLifecycle {
-  constructor(
-    public readonly state: TradeLifecycleState,
-    private readonly model: SpreadSlippageModel
-  ) {}
-
-  advance(bar: Candle): TradeLifecycleState {
-    if (isTerminal(this.state.state) || this.state.state === "PLANNED" || this.state.state === "SUBMITTED") {
-      if (this.state.state === "PLANNED" || this.state.state === "SUBMITTED") {
-        this.state.state = "OPEN";
-        this.state.openedAt = bar.openTime;
-      } else {
-        return this.state;
-      }
-    }
-    const s = this.state;
-    const long = s.direction === "LONG";
-
-    // Conservative: if the bar could hit both SL and TP1, assume SL first.
-    const hitSl = long ? bar.low <= s.stopLoss : bar.high >= s.stopLoss;
-    const hitTp2 = long ? bar.high >= s.takeProfit2 : bar.low <= s.takeProfit2;
-    const hitTp1 = long ? bar.high >= s.takeProfit1 : bar.low <= s.takeProfit1;
-
-    if (hitSl) {
-      s.state = "SL_HIT";
-      s.exitReason = "stop loss";
-      s.realizedPnl = pnl(s, s.stopLoss);
-    } else if (hitTp2) {
-      s.state = "TP2_HIT";
-      s.exitReason = "take profit 2";
-      s.realizedPnl = pnl(s, s.takeProfit2);
-    } else if (hitTp1 && s.state !== "TP1_HIT") {
-      s.state = "TP1_HIT";
-      s.exitReason = "take profit 1 (runner)";
-      s.realizedPnl = pnl(s, s.takeProfit1);
-    }
-    if (isTerminal(s.state)) s.closedAt = bar.openTime;
-    void this.model;
-    return s;
-  }
-}
-
-function pnl(s: TradeLifecycleState, exit: number): number {
-  const diff = s.direction === "LONG" ? exit - s.entry : s.entry - exit;
-  return diff * 100 * s.lotSize;
-}
-
 export interface BacktestCycle {
   readonly index: number;
   readonly outcome: {
@@ -154,6 +169,7 @@ export interface BacktestResult {
   readonly cycles: BacktestCycle[];
   readonly simulatedFills: readonly TradeLifecycleState[];
   readonly store: BacktestStore;
+  readonly metrics: BacktestPerformanceMetrics;
 }
 
 /**
@@ -165,6 +181,7 @@ export class BacktestRunner {
   private readonly confluence = new ConfluenceEngine([new StructureEngine(), new LiquidityEngine(), new PriceActionEngine()]);
   private readonly strategy = new StrongCandleStrategy();
   private readonly setups = new SetupStore();
+  private readonly tracker: RiskStateTracker;
 
   constructor(
     private readonly fixtures: readonly Candle[],
@@ -172,8 +189,18 @@ export class BacktestRunner {
     private readonly model: SpreadSlippageModel,
     private readonly risk: RiskConfig,
     private readonly warmupBars = 5,
-    private readonly riskEnv: RiskEnvironment = { equity: risk.accountEquity, state: { openTrades: 0, netExposureLots: 0, marginUsedPct: 0, dailyLossPct: 0, weeklyLossPct: 0, maxDrawdownPct: 0 }, killSwitch: "NONE" }
-  ) {}
+    riskEnv?: RiskEnvironment
+  ) {
+    this.tracker = new RiskStateTracker(risk.accountEquity);
+    if (riskEnv?.state) {
+      this.tracker.restore({
+        currentEquity: riskEnv.equity,
+        dailyRealizedPnl: (riskEnv.state.dailyLossPct * risk.accountEquity) / -100,
+        weeklyRealizedPnl: (riskEnv.state.weeklyLossPct * risk.accountEquity) / -100,
+        maxDrawdownPct: riskEnv.state.maxDrawdownPct,
+      });
+    }
+  }
 
   /** Runs the full deterministic decision path over the fixtures. */
   async run(): Promise<BacktestResult> {
@@ -193,50 +220,78 @@ export class BacktestRunner {
 
     for (let i = this.warmupBars; i < sorted.length; i++) {
       const current = sorted[i]!;
-      // Only bars whose closeTime <= current bar's close are visible — no lookahead.
+
+      // 1. Advance existing open positions against current bar
+      for (const lc of this.store.liveTrades()) {
+        const prevState = lc.state;
+        const prevPnl = lc.realizedPnl ?? 0;
+        new TradeLifecycle(lc, this.model).advance(current);
+
+        if (lc.state !== prevState) {
+          const deltaPnl = (lc.realizedPnl ?? 0) - prevPnl;
+          if (lc.state === "TP1_HIT") {
+            this.tracker.recordRealizedPnl(deltaPnl, current.openTime);
+          } else if (isTerminal(lc.state)) {
+            this.tracker.recordTradeClosed(lc.planId, deltaPnl, current.openTime);
+          }
+        }
+      }
+
+      // 2. Evaluate decision on closed bars visible at current bar closeTime
       const candlesSeen = this.store.viewAsOf(current.closeTime);
       const outcome = await decide({ symbol, timeframe, candles: candlesSeen });
       cycles.push({ index: i, outcome, candlesSeen });
 
+      // 3. Entry timing: Fill at NEXT candle open (bar i+1) if simulated execution approved
       if (outcome.action.kind === "EXECUTED_SIMULATED") {
-        const fill = this.model.adjustedFill((outcome.setup as { direction: Direction }).direction, current.close);
-        const plan: TradePlan = {
-          id: `bt:${current.openTime}`,
-          signalId: `bt-signal:${current.openTime}`,
-          symbol: symbol as TradePlan["symbol"],
-          direction: (outcome.setup as { direction: Direction }).direction,
-          entry: fill,
-          stopLoss: (outcome.setup as { stopLoss: number }).stopLoss,
-          takeProfit1: (outcome.setup as { takeProfit1: number }).takeProfit1,
-          takeProfit2: (outcome.setup as { takeProfit2: number }).takeProfit2,
-          lotSize: (outcome as { lotSize?: number }).lotSize ?? 0.05,
-          riskAmount: this.risk.accountEquity * (this.risk.perTradePct / 100),
-          mode: "BACKTEST",
-          createdAt: current.openTime,
-        };
-        this.store.plans.push(plan);
-        const lifecycleState: TradeLifecycleState = {
-          planId: plan.id,
-          direction: plan.direction,
-          entry: plan.entry,
-          stopLoss: plan.stopLoss,
-          takeProfit1: plan.takeProfit1,
-          takeProfit2: plan.takeProfit2,
-          lotSize: plan.lotSize,
-          state: "SUBMITTED",
-        };
-        this.store.lifecycles.push(lifecycleState);
-        simulatedFills.push(lifecycleState);
-      }
-
-      // Advance every open lifecycle with the current (just-closed) bar.
-      for (const lc of this.store.liveTrades()) {
-        new TradeLifecycle(lc, this.model).advance(current);
+        const setup = outcome.setup as { direction: Direction; stopLoss: number; takeProfit1: number; takeProfit2: number };
+        const nextBar = i + 1 < sorted.length ? sorted[i + 1]! : null;
+        if (nextBar) {
+          const fillEntry = this.model.adjustedFill(setup.direction, nextBar.open);
+          const plan: TradePlan = {
+            id: `bt:${nextBar.openTime}`,
+            signalId: `bt-signal:${nextBar.openTime}`,
+            symbol: symbol as TradePlan["symbol"],
+            direction: setup.direction,
+            entry: fillEntry,
+            stopLoss: setup.stopLoss,
+            takeProfit1: setup.takeProfit1,
+            takeProfit2: setup.takeProfit2,
+            lotSize: (outcome as { lotSize?: number }).lotSize ?? 0.05,
+            riskAmount: this.tracker.currentEquity * (this.risk.perTradePct / 100),
+            mode: "BACKTEST",
+            createdAt: nextBar.openTime,
+          };
+          this.store.plans.push(plan);
+          const lifecycleState: TradeLifecycleState = {
+            planId: plan.id,
+            direction: plan.direction,
+            entry: plan.entry,
+            stopLoss: plan.stopLoss,
+            takeProfit1: plan.takeProfit1,
+            takeProfit2: plan.takeProfit2,
+            lotSize: plan.lotSize,
+            state: "SUBMITTED",
+          };
+          this.store.lifecycles.push(lifecycleState);
+          simulatedFills.push(lifecycleState);
+          this.tracker.recordTradeOpened({
+            id: plan.id,
+            symbol: plan.symbol,
+            direction: plan.direction,
+            entry: plan.entry,
+            lotSize: plan.lotSize,
+            openedAt: nextBar.openTime,
+          });
+        }
       }
     }
 
-    this.store.closed.push(...this.store.lifecycles.filter((l) => isTerminal(l.state)));
-    return { cycles, simulatedFills, store: this.store };
+    const closedTrades = this.store.lifecycles.filter((l) => isTerminal(l.state));
+    this.store.closed.push(...closedTrades);
+    const metrics = calculatePerformanceMetrics(closedTrades, this.risk.accountEquity);
+
+    return { cycles, simulatedFills, store: this.store, metrics };
   }
 
   /** The default decision path: confluence -> strategy -> risk, with AI skipped (replayable offline). */
@@ -247,7 +302,14 @@ export class BacktestRunner {
     const last = ctx.candles[ctx.candles.length - 1];
     const base = { symbol: ctx.symbol, timeframe: engineCtx.timeframe, barOpenTime: last?.openTime ?? 0, setup };
     if (!setup) return { ...base, action: { kind: "NO_SETUP" } };
-    const risk = evaluateRisk(this.risk, this.riskEnv, setup, setup.direction);
+
+    const env: RiskEnvironment = {
+      equity: this.tracker.currentEquity,
+      state: this.tracker.state,
+      killSwitch: "NONE",
+      mode: "BACKTEST",
+    };
+    const risk = evaluateRisk(this.risk, env, setup, setup.direction, "BACKTEST");
     if (risk.verdict !== "APPROVED") return { ...base, action: { kind: "RISK_REJECTED" } };
     return { ...base, action: { kind: "EXECUTED_SIMULATED" }, lotSize: risk.lotSize } as unknown as BacktestCycle["outcome"];
   }

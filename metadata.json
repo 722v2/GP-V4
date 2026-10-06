@@ -1,0 +1,7 @@
+{
+  "name": "GP-V4 Trading Engine",
+  "description": "GP-V4 modular monolith for XAU/USD analysis, confluence scoring, and risk-gated trade execution.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

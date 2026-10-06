@@ -19,6 +19,7 @@ import { buildSignal, buildTradePlan, resetSignalCounter } from "../../src/pipel
 import { collectClosedBarEvents } from "../../src/pipeline/barEvents.js";
 import { isExecutionMode, isSimulated, requiresConfirmation, MODES } from "../../src/pipeline/types.js";
 import { KillSwitch } from "../../src/risk/KillSwitch.js";
+import { RiskStateTracker } from "../../src/risk/RiskStateTracker.js";
 import { IdempotencyGuard } from "../../src/safety/IdempotencyGuard.js";
 import type { RiskConfig } from "../../src/risk/RiskEngine.js";
 import type { AiProvider, AiProviderResult } from "../../src/ai/types.js";
@@ -109,7 +110,12 @@ function aiFails(): AiProvider {
   };
 }
 
-function makePipeline(provider: AiProvider, mode: (typeof MODES)[number], riskState = { openTrades: 0 }, opts: { killSwitch?: KillSwitch; idempotency?: IdempotencyGuard } = {}) {
+function makePipeline(
+  provider: AiProvider,
+  mode: (typeof MODES)[number],
+  riskState = { openTrades: 0 },
+  opts: { killSwitch?: KillSwitch; idempotency?: IdempotencyGuard; riskTracker?: RiskStateTracker } = {}
+) {
   resetSignalCounter();
   const bus = new EventBus();
   const cache = new CandleCache();
@@ -130,6 +136,22 @@ function makePipeline(provider: AiProvider, mode: (typeof MODES)[number], riskSt
     () => 1_000_000
   );
   const telegram = new TelegramNotifier({ botToken: "", chatId: "", enabled: false }, log);
+  const tracker = opts.riskTracker ?? new RiskStateTracker(RISK.accountEquity, { now: () => 1_000_000 });
+  tracker.attachToBus(bus);
+
+  if (riskState.openTrades > 0) {
+    for (let i = 0; i < riskState.openTrades; i++) {
+      tracker.recordTradeOpened({
+        id: `seed:${i}`,
+        symbol: "XAUUSD",
+        direction: "LONG",
+        entry: 2000,
+        lotSize: 0.05,
+        openedAt: 1_000_000,
+      });
+    }
+  }
+
   const pipeline = new TradingPipeline({
     bus,
     cache,
@@ -139,16 +161,10 @@ function makePipeline(provider: AiProvider, mode: (typeof MODES)[number], riskSt
     ai,
     riskConfig: RISK,
     riskEnv: () => ({
-      equity: RISK.accountEquity,
-      state: {
-        openTrades: riskState.openTrades,
-        netExposureLots: 0,
-        marginUsedPct: 0,
-        dailyLossPct: 0,
-        weeklyLossPct: 0,
-        maxDrawdownPct: 0,
-      },
-      killSwitch: "NONE",
+      equity: tracker.currentEquity,
+      state: tracker.state,
+      killSwitch: opts.killSwitch ? opts.killSwitch.level : "NONE",
+      mode,
     }),
     repo: new NullRepository(),
     telegram,
@@ -157,8 +173,9 @@ function makePipeline(provider: AiProvider, mode: (typeof MODES)[number], riskSt
     now: () => 1_000_000,
     idempotency: opts.idempotency,
     killSwitch: opts.killSwitch,
+    riskTracker: tracker,
   });
-  return { pipeline, cache, events };
+  return { pipeline, cache, events, tracker };
 }
 
 describe("mode helpers", () => {
@@ -328,6 +345,19 @@ describe("TradingPipeline", () => {
     const second = await pipeline.onBarClosed("XAUUSD", "M5");
     expect(second.action.kind).toBe("NO_SETUP");
     expect(second.reasons[0]).toMatch(/idempotency guard/);
+  });
+
+  it("dynamic risk tracker updates state on paper execution and reflects in subsequent risk evaluations", async () => {
+    const { pipeline, cache, tracker } = makePipeline(aiApproves(), "PAPER_TRADING", { openTrades: 0 });
+    expect(tracker.state.openTrades).toBe(0);
+    expect(tracker.state.netExposureLots).toBe(0);
+
+    cache.append({ symbol: "XAUUSD", timeframe: "M5", candles: bullishCandles() });
+    const out = await pipeline.onBarClosed("XAUUSD", "M5");
+
+    expect(out.action.kind).toBe("EXECUTED_SIMULATED");
+    expect(tracker.state.openTrades).toBe(1);
+    expect(tracker.state.netExposureLots).toBeGreaterThan(0);
   });
 });
 

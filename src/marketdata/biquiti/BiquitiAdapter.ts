@@ -114,7 +114,12 @@ export class BiquitiAdapter implements MarketDataProvider {
 
   async health(): Promise<ProviderHealth> {
     if (!this.isConfigured()) {
-      return { provider: this.name, ok: false, detail: "not configured (missing base URL, candles path, or symbol mapping)", checkedAt: Date.now() };
+      return {
+        provider: this.name,
+        ok: false,
+        detail: "not configured (missing base URL, candles path, or symbol mapping)",
+        checkedAt: Date.now(),
+      };
     }
     try {
       await this.fetchCandles({ symbol: "XAUUSD", timeframe: "M1", limit: 1 });

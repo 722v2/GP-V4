@@ -17,6 +17,14 @@ export interface ScanTickResult {
   readonly errors: readonly string[];
 }
 
+export interface ScannerStats {
+  readonly timestamp: number;
+  readonly durationMs: number;
+  readonly fetched: number;
+  readonly newBars: number;
+  readonly errors: readonly string[];
+}
+
 /**
  * Scanner: on each tick, fetches recent closed bars for every symbol×timeframe,
  * appends them to the cache, and reports the bars that are NEW. The pipeline
@@ -24,6 +32,9 @@ export interface ScanTickResult {
  * bars ever reach strategies.
  */
 export class Scanner {
+  private isScanning = false;
+  private lastStats: ScannerStats | null = null;
+
   constructor(
     private readonly provider: MarketDataProvider,
     private readonly cache: CandleCache,
@@ -31,30 +42,72 @@ export class Scanner {
     private readonly log: Logger
   ) {}
 
-  /** One scan pass. Never throws — provider errors are collected, not raised. */
-  async tick(): Promise<ScanTickResult> {
-    const newBars: { symbol: Symbol; timeframe: Timeframe; openTime: number }[] = [];
-    const errors: string[] = [];
-    let fetched = 0;
+  /** Indicates whether a scan pass is currently executing. */
+  get scanning(): boolean {
+    return this.isScanning;
+  }
 
-    for (const symbol of this.cfg.symbols) {
-      for (const timeframe of this.cfg.timeframes) {
-        try {
-          const series = await this.provider.fetchCandles({ symbol, timeframe, limit: this.cfg.limit });
-          fetched += 1;
-          const added = this.cache.append(series);
-          for (const bar of added) {
-            newBars.push({ symbol, timeframe, openTime: bar.openTime });
-          }
-        } catch (err) {
-          const msg = `${symbol}:${timeframe} ${err instanceof Error ? err.message : String(err)}`;
-          errors.push(msg);
-          this.log.warn(`scan error: ${msg}`);
-        }
-      }
+  /** Returns authoritative telemetry from the most recent scan pass, or null if no pass has run. */
+  get lastScanStats(): ScannerStats | null {
+    return this.lastStats;
+  }
+
+  /** One scan pass. Never throws — provider errors are collected, not raised. Single-flight enforced. */
+  async tick(): Promise<ScanTickResult> {
+    if (this.isScanning) {
+      this.log.debug("scan tick skipped: scan already in progress");
+      return { newBars: [], fetched: 0, errors: [] };
     }
 
-    this.log.debug("scan tick", { fetched, newBars: newBars.length, errors: errors.length });
-    return { newBars, fetched, errors };
+    this.isScanning = true;
+    const startTime = Date.now();
+    try {
+      const newBars: { symbol: Symbol; timeframe: Timeframe; openTime: number }[] = [];
+      const errors: string[] = [];
+      let fetched = 0;
+
+      for (const symbol of this.cfg.symbols) {
+        for (const timeframe of this.cfg.timeframes) {
+          try {
+            const series = await this.provider.fetchCandles({ symbol, timeframe, limit: this.cfg.limit });
+            fetched += 1;
+            const added = this.cache.append(series);
+            for (const bar of added) {
+              newBars.push({ symbol, timeframe, openTime: bar.openTime });
+            }
+          } catch (err) {
+            const msg = `${symbol}:${timeframe} ${err instanceof Error ? err.message : String(err)}`;
+            errors.push(msg);
+            this.log.warn(`scan error: ${msg}`);
+          }
+        }
+      }
+
+      this.log.debug("scan tick", { fetched, newBars: newBars.length, errors: errors.length });
+      const durationMs = Date.now() - startTime;
+      this.lastStats = {
+        timestamp: Date.now(),
+        durationMs,
+        fetched,
+        newBars: newBars.length,
+        errors,
+      };
+
+      return { newBars, fetched, errors };
+    } catch (err) {
+      const msg = `unexpected scanner error: ${err instanceof Error ? err.message : String(err)}`;
+      this.log.error(msg, err);
+      const durationMs = Date.now() - startTime;
+      this.lastStats = {
+        timestamp: Date.now(),
+        durationMs,
+        fetched: 0,
+        newBars: 0,
+        errors: [msg],
+      };
+      return { newBars: [], fetched: 0, errors: [msg] };
+    } finally {
+      this.isScanning = false;
+    }
   }
 }

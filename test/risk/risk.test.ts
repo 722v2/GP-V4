@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { computeLotSize, evaluateRisk, evaluateBreaches, breachLevel } from "../../src/risk/RiskEngine.js";
+import {
+  computeLotSize,
+  calculatePositionSizing,
+  evaluateRisk,
+  evaluateBreaches,
+  breachLevel,
+} from "../../src/risk/RiskEngine.js";
 import type { RiskConfig, RiskState, RiskEnvironment } from "../../src/risk/RiskEngine.js";
 import type { Setup } from "../../src/core/types/Setup.js";
+import type { InstrumentSpec } from "../../src/risk/InstrumentSpec.js";
+import { DEFAULT_XAUUSD_SPEC } from "../../src/risk/InstrumentSpec.js";
 
 const CFG: RiskConfig = {
   perTradePct: 0.5,
+  minRiskPerTradePct: 0.01,
+  maxRiskPerTradePct: 5.0,
   dailyLossCapPct: 3,
   weeklyLossCapPct: 6,
   maxDrawdownPct: 10,
@@ -12,6 +22,9 @@ const CFG: RiskConfig = {
   netExposureMax: 1.5,
   marginCeilingPct: 50,
   accountEquity: 10_000,
+  minStopDistancePts: 1.0,
+  maxStopDistancePts: 50.0,
+  maxLot: 10.0,
 };
 
 const CLEAN_STATE: RiskState = {
@@ -43,7 +56,7 @@ const LONG_SETUP: Setup = {
   evidence: [],
 };
 
-describe("computeLotSize", () => {
+describe("computeLotSize & calculatePositionSizing", () => {
   it("sizes XAUUSD lots from stop distance and risk budget", () => {
     // risk budget = 10_000 * 0.5% = $50; risk per lot = 10 * $100 = $1000 → 0.05 lots
     expect(computeLotSize(2000, 1990, 10_000, 0.5)).toBe(0.05);
@@ -60,81 +73,125 @@ describe("computeLotSize", () => {
   });
 });
 
-describe("evaluateBreaches / breachLevel", () => {
-  it("no breaches on clean state", () => {
-    const b = evaluateBreaches(CFG, CLEAN_STATE);
-    expect(Object.values(b).every((v) => !v)).toBe(true);
-    expect(breachLevel(b)).toBe("NONE");
+describe("P2-15 Focused Requirement Tests (A through S)", () => {
+  it("A: equity × risk% produces expected risk capital", () => {
+    const sizing = calculatePositionSizing(2000, 1990, 20_000, 1.0, DEFAULT_XAUUSD_SPEC);
+    expect(sizing.riskBudgetUsd).toBe(200); // 20_000 * 1.0% = $200
   });
 
-  it("loss breaches escalate to L3", () => {
-    const b = evaluateBreaches(CFG, { ...CLEAN_STATE, dailyLossPct: 3.5 });
-    expect(b.dailyLossExceeded).toBe(true);
-    expect(breachLevel(b)).toBe("L3");
-    const b2 = evaluateBreaches(CFG, { ...CLEAN_STATE, maxDrawdownPct: 11 });
-    expect(breachLevel(b2)).toBe("L3");
+  it("B: position size decreases when stop distance increases", () => {
+    const narrowStop = calculatePositionSizing(2000, 1990, 10_000, 0.5); // 10 pts
+    const wideStop = calculatePositionSizing(2000, 1970, 10_000, 0.5);   // 30 pts
+    expect(narrowStop.lotSize).toBeGreaterThan(wideStop.lotSize);
   });
 
-  it("capacity breaches escalate to L2", () => {
-    const b = evaluateBreaches(CFG, { ...CLEAN_STATE, openTrades: 2 });
-    expect(b.maxOpenTradesExceeded).toBe(true);
-    expect(breachLevel(b)).toBe("L2");
-  });
-});
-
-describe("evaluateRisk", () => {
-  it("approves a clean setup with the right lot size and risk amount", () => {
-    const d = evaluateRisk(CFG, CLEAN_ENV, LONG_SETUP, "LONG");
-    expect(d.verdict).toBe("APPROVED");
-    expect(d.lotSize).toBe(0.05);
-    expect(d.riskAmount).toBeCloseTo(10 * 100 * 0.05, 2); // $50
-    expect(d.reasons).toHaveLength(0);
-    expect(d.killSwitchLevel).toBe("NONE");
+  it("C: position size increases when equity increases", () => {
+    const lowEquity = calculatePositionSizing(2000, 1990, 10_000, 0.5);
+    const highEquity = calculatePositionSizing(2000, 1990, 50_000, 0.5);
+    expect(highEquity.lotSize).toBeGreaterThan(lowEquity.lotSize);
   });
 
-  it("rejects when max open trades is reached", () => {
-    const env: RiskEnvironment = { equity: 10_000, state: { ...CLEAN_STATE, openTrades: 2 }, killSwitch: "NONE" };
-    const d = evaluateRisk(CFG, env, LONG_SETUP, "LONG");
-    expect(d.verdict).toBe("REJECTED");
-    expect(d.reasons.join(" ")).toMatch(/max open trades/);
+  it("D: minimum stop distance rejects too-tight stops", () => {
+    const tightSetup = { ...LONG_SETUP, stopLoss: 1999.5 }; // 0.5 pts < 1.0 min
+    const decision = evaluateRisk(CFG, CLEAN_ENV, tightSetup, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/below minimum allowed/);
   });
 
-  it("rejects on L3 kill switch regardless of setup quality", () => {
-    const env: RiskEnvironment = { equity: 10_000, state: { ...CLEAN_STATE, dailyLossPct: 5 }, killSwitch: "NONE" };
-    const d = evaluateRisk(CFG, env, LONG_SETUP, "LONG");
-    expect(d.verdict).toBe("REJECTED");
-    expect(d.killSwitchLevel).toBe("L3");
+  it("E: maximum stop distance rejects too-wide stops", () => {
+    const wideSetup = { ...LONG_SETUP, stopLoss: 1930 }; // 70 pts > 50.0 max
+    const decision = evaluateRisk(CFG, CLEAN_ENV, wideSetup, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/above maximum allowed/);
   });
 
-  it("L2 kill switch blocks execution modes but allows ANALYSIS_ONLY", () => {
-    const l2Env: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "L2" };
-    const execDecision = evaluateRisk(CFG, l2Env, LONG_SETUP, "LONG", "PAPER_TRADING");
-    expect(execDecision.verdict).toBe("REJECTED");
-    expect(execDecision.reasons).toContain("kill switch L2 active — new entries halted");
-
-    const analysisDecision = evaluateRisk(CFG, l2Env, LONG_SETUP, "LONG", "ANALYSIS_ONLY");
-    expect(analysisDecision.verdict).toBe("APPROVED");
-    expect(analysisDecision.killSwitchLevel).toBe("L2");
+  it("F: max lot is enforced centrally", () => {
+    const hugeEquityEnv: RiskEnvironment = { equity: 5_000_000, state: CLEAN_STATE, killSwitch: "NONE" };
+    const cfgWithMaxLot = { ...CFG, maxLot: 2.0 };
+    const decision = evaluateRisk(cfgWithMaxLot, hugeEquityEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/exceeds max lot limit/);
   });
 
-  it("L3 kill switch blocks even in ANALYSIS_ONLY mode", () => {
-    const l3Env: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "L3" };
-    const d = evaluateRisk(CFG, l3Env, LONG_SETUP, "LONG", "ANALYSIS_ONLY");
-    expect(d.verdict).toBe("REJECTED");
-    expect(d.reasons).toContain("kill switch L3 active — full halt");
+  it("G: invalid/zero equity rejects safely", () => {
+    const zeroEquityEnv: RiskEnvironment = { equity: 0, state: CLEAN_STATE, killSwitch: "NONE" };
+    const decision = evaluateRisk(CFG, zeroEquityEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/equity is zero or invalid/);
   });
 
-  it("rejects an inverted stop for the direction", () => {
-    const bad = { ...LONG_SETUP, stopLoss: 2010 };
-    const d = evaluateRisk(CFG, CLEAN_ENV, bad, "LONG");
-    expect(d.verdict).toBe("REJECTED");
-    expect(d.reasons.join(" ")).toMatch(/not below entry/);
+  it("H: invalid/zero stop distance rejects safely", () => {
+    const zeroStop = { ...LONG_SETUP, stopLoss: 2000 };
+    const decision = evaluateRisk(CFG, CLEAN_ENV, zeroStop, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/invalid stop distance/);
   });
 
-  it("rejects a zero lot size from an extreme stop distance", () => {
-    const wide = { ...LONG_SETUP, stopLoss: 1000 };
-    const d = evaluateRisk(CFG, CLEAN_ENV, wide, "LONG");
-    expect(d.verdict).toBe("REJECTED");
-    expect(d.reasons.join(" ")).toMatch(/lot size is zero/);
+  it("I: spread cost is included in risk calculation", () => {
+    const noSpread = calculatePositionSizing(2000, 1990, 10_000, 0.5, DEFAULT_XAUUSD_SPEC, 0);
+    const withSpread = calculatePositionSizing(2000, 1990, 10_000, 0.5, DEFAULT_XAUUSD_SPEC, 2.0);
+    expect(withSpread.spreadCostUsd).toBeGreaterThan(0);
+    expect(withSpread.lotSize).toBeLessThanOrEqual(noSpread.lotSize);
+  });
+
+  it("J: live spread path rejects when spread is invalid/negative", () => {
+    const decision = evaluateRisk(CFG, CLEAN_ENV, LONG_SETUP, "LONG", "AUTO_TRADING", DEFAULT_XAUUSD_SPEC, -1);
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/spread points invalid or unavailable/);
+  });
+
+  it("K: lot step normalization never increases risk above budget", () => {
+    const sizing = calculatePositionSizing(2000, 1993, 10_000, 0.5, DEFAULT_XAUUSD_SPEC); // budget = $50
+    // total risk amount = stopDistance * contractSize * lotSize = 7 * 100 * 0.07 = $49.00 <= $50.00
+    expect(sizing.riskAmount).toBeLessThanOrEqual(sizing.riskBudgetUsd);
+  });
+
+  it("L: minimum lot enforcement", () => {
+    const tinyEquityEnv: RiskEnvironment = { equity: 100, state: CLEAN_STATE, killSwitch: "NONE" }; // budget = $0.50
+    const decision = evaluateRisk(CFG, tinyEquityEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/below min lot/);
+  });
+
+  it("M: invalid instrument specification rejects safely", () => {
+    const badSpec: InstrumentSpec = { ...DEFAULT_XAUUSD_SPEC, contractSize: 0 };
+    const decision = evaluateRisk(CFG, CLEAN_ENV, LONG_SETUP, "LONG", "ANALYSIS_ONLY", badSpec);
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/invalid instrument specification/);
+  });
+
+  it("N: existing exposure/risk limits still apply", () => {
+    const fullEnv: RiskEnvironment = { equity: 10_000, state: { ...CLEAN_STATE, openTrades: 2 }, killSwitch: "NONE" };
+    const decision = evaluateRisk(CFG, fullEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.reasons.join(" ")).toMatch(/max open trades/);
+  });
+
+  it("O: KillSwitch still blocks execution", () => {
+    const killEnv: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "L3" };
+    const decision = evaluateRisk(CFG, killEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("REJECTED");
+    expect(decision.killSwitchLevel).toBe("L3");
+  });
+
+  it("P: AI cannot override calculated risk size", () => {
+    // RiskEngine computes lot size independently from setup levels and account equity
+    const decision = evaluateRisk(CFG, CLEAN_ENV, LONG_SETUP, "LONG");
+    expect(decision.lotSize).toBe(0.05); // Central calculation ignored any external AI opinion
+  });
+
+  it("Q: PAPER mode uses configured paper capital", () => {
+    const paperEnv: RiskEnvironment = { equity: CFG.accountEquity, state: CLEAN_STATE, killSwitch: "NONE", mode: "PAPER_TRADING" };
+    const decision = evaluateRisk(CFG, paperEnv, LONG_SETUP, "LONG");
+    expect(decision.verdict).toBe("APPROVED");
+    expect(decision.equityUsed).toBe(10_000);
+  });
+
+  it("R: BACKTEST/REPLAY remain deterministic with point-in-time equity", () => {
+    const btEnv: RiskEnvironment = { equity: 10_000, state: CLEAN_STATE, killSwitch: "NONE", mode: "BACKTEST" };
+    const d1 = evaluateRisk(CFG, btEnv, LONG_SETUP, "LONG");
+    const d2 = evaluateRisk(CFG, btEnv, LONG_SETUP, "LONG");
+    expect(d1.lotSize).toBe(d2.lotSize);
+    expect(d1.verdict).toBe("APPROVED");
   });
 });

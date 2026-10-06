@@ -47,6 +47,7 @@ export function validateCandleSeries(
 
     if (c.symbol !== symbol) errors.push(`${idx}: symbol mismatch ${c.symbol} != ${symbol}`);
     if (c.timeframe !== timeframe) errors.push(`${idx}: timeframe mismatch`);
+    if (c.open <= 0 || c.high <= 0 || c.low <= 0 || c.close <= 0) errors.push(`${idx}: non-positive price`);
     if (!(c.high >= Math.max(c.open, c.close))) errors.push(`${idx}: high < max(open,close)`);
     if (!(c.low <= Math.min(c.open, c.close))) errors.push(`${idx}: low > min(open,close)`);
     if (!(c.high >= c.low)) errors.push(`${idx}: high < low`);

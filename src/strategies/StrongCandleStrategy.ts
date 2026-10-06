@@ -58,17 +58,17 @@ export class StrongCandleStrategy implements AnalysisEngine {
 
     const body = Math.abs(last.close - last.open);
     const entry = last.close;
-    const stopDistance = body + this.cfg.stopAtrMultiple * atr;
     const stopLoss = direction === "LONG" ? last.low - this.cfg.stopAtrMultiple * atr : last.high + this.cfg.stopAtrMultiple * atr;
-    const takeProfit1 = direction === "LONG" ? entry + this.cfg.tp1R * stopDistance : entry - this.cfg.tp1R * stopDistance;
-    const takeProfit2 = direction === "LONG" ? entry + this.cfg.tp2R * stopDistance : entry - this.cfg.tp2R * stopDistance;
+    const riskDistance = Math.abs(entry - stopLoss);
+    const takeProfit1 = direction === "LONG" ? entry + this.cfg.tp1R * riskDistance : entry - this.cfg.tp1R * riskDistance;
+    const takeProfit2 = direction === "LONG" ? entry + this.cfg.tp2R * riskDistance : entry - this.cfg.tp2R * riskDistance;
     const invalidationPrice = stopLoss;
 
     const evidence: Evidence[] = [
       {
         source: "strong-candle",
         kind: direction === "LONG" ? "strong-bull-trigger" : "strong-bear-trigger",
-        detail: `body ${(bodyRatioOf(last) * 100).toFixed(0)}% of range, ${(body / atr).toFixed(2)} ATR; stop ${stopDistance.toFixed(2)}`,
+        detail: `body ${(bodyRatioOf(last) * 100).toFixed(0)}% of range, ${(body / atr).toFixed(2)} ATR; stop ${riskDistance.toFixed(2)}`,
         weight: signedWeight(direction, 0.7),
       },
     ];
@@ -117,3 +117,4 @@ function tfMs(tf: string): number {
 }
 
 export { DEFAULT_PA_CONFIG };
+export { calculateR, calculateTradeR, type TradeRMultiples } from "../core/types/Trade.js";

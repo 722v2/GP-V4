@@ -43,7 +43,7 @@ export type ChatCompletionResponse = z.infer<typeof ChatCompletionResponseSchema
 /** Provider boundary. Implementations may call a network API or replay fixtures. */
 export interface AiProvider {
   readonly name: string;
-  complete(req: ChatCompletionRequest, opts?: { signal?: AbortSignal }): Promise<AiProviderResult>;
+  complete(req: ChatCompletionRequest, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<AiProviderResult>;
 }
 
 export interface AiTokenUsage {

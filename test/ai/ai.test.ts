@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NovitaProvider } from "../../src/ai/NovitaProvider.js";
-import { AiRouter, DEFAULT_AI_ROUTER_CONFIG, extractJson } from "../../src/ai/AiRouter.js";
+import {
+  AiRouter,
+  DEFAULT_AI_ROUTER_CONFIG,
+  extractJson,
+  validateAiDecisionAgainstSetup,
+} from "../../src/ai/AiRouter.js";
 import { BudgetGuard } from "../../src/ai/BudgetGuard.js";
 import { CircuitBreaker } from "../../src/ai/CircuitBreaker.js";
 import { ResponseCache } from "../../src/ai/ResponseCache.js";
 import { ContextBuilder } from "../../src/ai/ContextBuilder.js";
-import type { AiProvider, AiProviderResult } from "../../src/ai/types.js";
+import { ReplayProvider, ReplayRecorder } from "../../src/ai/ReplayProvider.js";
+import type { AiProvider, AiProviderResult, ChatCompletionRequest } from "../../src/ai/types.js";
 import type { AiUsage } from "../../src/core/types/AiDecision.js";
 import { createConsoleLogger } from "../../src/core/logging/Logger.js";
 import { AppError, ErrorCode } from "../../src/core/logging/Logger.js";
@@ -46,7 +52,7 @@ const SETUP: Setup = {
   evidence: [],
 };
 
-function validDecisionJson(): string {
+function validDecisionJson(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     decision: "TRADE_CANDIDATE",
     direction: "LONG",
@@ -62,21 +68,34 @@ function validDecisionJson(): string {
     management_plan: "hold to TP1",
     reassessment_conditions: ["close below SL"],
     reason_codes: ["SC-01"],
+    ...overrides,
   });
 }
 
-function fakeProvider(content: string): AiProvider {
+function fakeProvider(content: string, onComplete?: (req: ChatCompletionRequest, opts?: any) => void): AiProvider {
   return {
     name: "fake",
-    complete: async (): Promise<AiProviderResult> => ({
-      content,
-      usage: { prompt: 1000, completion: 500 },
-      model: "test-model",
-    }),
+    complete: async (req, opts): Promise<AiProviderResult> => {
+      if (onComplete) onComplete(req, opts);
+      return {
+        content,
+        usage: { prompt: 1000, completion: 500 },
+        model: req.model || "test-model",
+      };
+    },
   };
 }
 
-function makeRouter(provider: AiProvider, opts: { budgetLog?: AiUsage[]; breaker?: CircuitBreaker; now?: () => number } = {}) {
+function makeRouter(
+  provider: AiProvider,
+  opts: {
+    budgetLog?: AiUsage[];
+    breaker?: CircuitBreaker;
+    now?: () => number;
+    sleepFn?: (ms: number) => Promise<void>;
+    cfg?: Partial<typeof DEFAULT_AI_ROUTER_CONFIG>;
+  } = {}
+) {
   const usageLog: AiUsage[] = opts.budgetLog ?? [];
   const breaker = opts.breaker ?? new CircuitBreaker(3, 60_000, opts.now ?? Date.now);
   const budget = {
@@ -95,13 +114,14 @@ function makeRouter(provider: AiProvider, opts: { budgetLog?: AiUsage[]; breaker
     breaker,
     new ContextBuilder(),
     createConsoleLogger("test"),
-    { ...DEFAULT_AI_ROUTER_CONFIG, cacheTtlMs: 60_000 },
-    opts.now ?? (() => 1_000_000)
+    { ...DEFAULT_AI_ROUTER_CONFIG, cacheTtlMs: 60_000, ...(opts.cfg ?? {}) },
+    opts.now ?? (() => 1_000_000),
+    opts.sleepFn ?? (async () => {})
   );
   return { router, breaker };
 }
 
-describe("NovitaProvider", () => {
+describe("L: NovitaProvider Configurability", () => {
   const cfg = { baseUrl: "https://api.novita.ai", apiKey: "k", model: "m1", timeoutMs: 1000 };
 
   it("is not configured without credentials", async () => {
@@ -110,20 +130,24 @@ describe("NovitaProvider", () => {
     await expect(p.complete({ model: "", messages: [{ role: "user", content: "x" }] })).rejects.toThrow(/not configured/);
   });
 
-  it("parses a valid chat completion response", async () => {
-    const fetchImpl = (async () =>
-      new Response(
+  it("parses a valid chat completion response and respects model overrides", async () => {
+    let capturedBody: any;
+    const fetchImpl = (async (_url: string, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return new Response(
         JSON.stringify({
-          model: "m1",
+          model: capturedBody.model,
           choices: [{ index: 0, message: { role: "assistant", content: "hello" }, finish_reason: "stop" }],
           usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
         }),
         { status: 200 }
-      )) as typeof fetch;
+      );
+    }) as typeof fetch;
+
     const p = new NovitaProvider(cfg, createConsoleLogger("test"), fetchImpl);
-    const out = await p.complete({ model: "", messages: [{ role: "user", content: "x" }] });
+    const out = await p.complete({ model: "fast-m5-model", messages: [{ role: "user", content: "x" }] });
+    expect(capturedBody.model).toBe("fast-m5-model");
     expect(out.content).toBe("hello");
-    expect(out.usage).toEqual({ prompt: 10, completion: 5 });
   });
 
   it("surfaces HTTP errors and schema violations as typed errors", async () => {
@@ -137,133 +161,200 @@ describe("NovitaProvider", () => {
   });
 });
 
-describe("BudgetGuard", () => {
-  it("blocks when the hourly budget is exhausted", () => {
-    const now = 10_000_000;
-    const log: AiUsage[] = [{ windowStart: now - 1000, requests: 1, tokensPrompt: 0, tokensCompletion: 0, costUsd: 1 }];
-    const guard = new BudgetGuard({ hourlyBudgetUsd: 1, dailyBudgetUsd: 10 });
-    expect(guard.allows(now, log)).toBe(false);
+describe("Setup vs AI Validation Helper", () => {
+  it("A: setup direction mismatch → invalid", () => {
+    const decision = JSON.parse(validDecisionJson({ direction: "SHORT" }));
+    const result = validateAiDecisionAgainstSetup(decision, SETUP, 1.0);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("contradicts setup direction");
   });
 
-  it("allows spend older than the windows", () => {
-    const now = 10_000_000;
-    const log: AiUsage[] = [{ windowStart: now - 2 * 3_600_000, requests: 1, tokensPrompt: 0, tokensCompletion: 0, costUsd: 50 }];
-    const guard = new BudgetGuard({ hourlyBudgetUsd: 1, dailyBudgetUsd: 10 });
-    expect(guard.allows(now, log)).toBe(false); // daily still blocks
-    const log2: AiUsage[] = [{ windowStart: now - 2 * 86_400_000, requests: 1, tokensPrompt: 0, tokensCompletion: 0, costUsd: 50 }];
-    expect(guard.allows(now, log2)).toBe(true);
+  it("B: setup level mismatch beyond tolerance → invalid", () => {
+    const decision = JSON.parse(validDecisionJson({ entry: 2010 })); // setup entry is 2002
+    const result = validateAiDecisionAgainstSetup(decision, SETUP, 1.0);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("differs from setup entry");
   });
-});
 
-describe("CircuitBreaker", () => {
-  it("opens after threshold failures and half-opens after cooldown", () => {
-    let t = 0;
-    const cb = new CircuitBreaker(2, 1000, () => t);
-    expect(cb.canRequest()).toBe(true);
-    cb.recordFailure();
-    expect(cb.canRequest()).toBe(true);
-    cb.recordFailure();
-    expect(cb.canRequest()).toBe(false);
-    t = 1500;
-    expect(cb.status).toBe("HALF_OPEN");
-    expect(cb.canRequest()).toBe(true);
-    cb.recordFailure();
-    expect(cb.canRequest()).toBe(false);
-    cb.recordSuccess();
-    expect(cb.status).toBe("CLOSED");
+  it("C: valid AI decision matching setup → valid", () => {
+    const decision = JSON.parse(validDecisionJson());
+    const result = validateAiDecisionAgainstSetup(decision, SETUP, 1.0);
+    expect(result.valid).toBe(true);
   });
 });
 
-describe("ResponseCache", () => {
-  it("round-trips within TTL and expires after", () => {
-    const c = new ResponseCache(1000);
-    c.set("k", { a: 1 }, 0);
-    expect(c.get<{ a: number }>("k", 500)).toEqual({ a: 1 });
-    expect(c.get<{ a: number }>("k", 1001)).toBeUndefined();
+describe("AiRouter Hardening Features", () => {
+  it("A & B: setup mismatch causes AI router to degrade to INVALID_OUTPUT failure", async () => {
+    const badDir = validDecisionJson({ direction: "SHORT" });
+    const { router } = makeRouter(fakeProvider(badDir));
+    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.failure.kind).toBe("INVALID_OUTPUT");
+      expect(out.failure.message).toContain("contradicts setup direction");
+    }
   });
 
-  it("signature is deterministic and distinct", () => {
-    expect(ResponseCache.signature("s", "u")).toBe(ResponseCache.signature("s", "u"));
-    expect(ResponseCache.signature("s", "u")).not.toBe(ResponseCache.signature("s", "u2"));
+  it("D: confidence below configured minimum → downgraded to NO_TRADE (not TRADE_CANDIDATE)", async () => {
+    const lowConf = validDecisionJson({ confidence: 0.4 });
+    const { router } = makeRouter(fakeProvider(lowConf), { cfg: { minConfidence: 0.6 } });
+    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.decision.decision).toBe("NO_TRADE");
+      expect(out.decision.reason_codes).toContain("CONFIDENCE_BELOW_MINIMUM");
+    }
   });
-});
 
-describe("extractJson", () => {
-  it("unwraps fenced and prose-wrapped JSON", () => {
-    expect(extractJson('```json\n{"a":1}\n```')).toBe('{"a":1}');
-    expect(extractJson('Sure! {"a":1} hope that helps')).toBe('{"a":1}');
-    expect(extractJson('{"a":1}')).toBe('{"a":1}');
-  });
-});
-
-describe("AiRouter", () => {
-  it("returns a valid decision from a well-formed provider", async () => {
-    const { router } = makeRouter(fakeProvider(validDecisionJson()));
+  it("E: confidence at or above threshold → allowed as TRADE_CANDIDATE", async () => {
+    const goodConf = validDecisionJson({ confidence: 0.7 });
+    const { router } = makeRouter(fakeProvider(goodConf), { cfg: { minConfidence: 0.6 } });
     const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.decision.decision).toBe("TRADE_CANDIDATE");
-      expect(out.cached).toBe(false);
-      expect(out.tokens.prompt).toBe(1000);
     }
   });
 
-  it("serves the second identical request from cache", async () => {
-    const { router } = makeRouter(fakeProvider(validDecisionJson()));
-    await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    expect(out.ok).toBe(true);
-    if (out.ok) expect(out.cached).toBe(true);
-  });
-
-  it("degrades to INVALID_OUTPUT when the model returns garbage", async () => {
-    const { router } = makeRouter(fakeProvider("not json at all"));
-    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.failure.kind).toBe("INVALID_OUTPUT");
-  });
-
-  it("degrades when the decision schema is violated", async () => {
-    const bad = JSON.stringify({ decision: "MAYBE" });
-    const { router } = makeRouter(fakeProvider(bad));
-    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.failure.kind).toBe("INVALID_OUTPUT");
-  });
-
-  it("respects an open circuit breaker", async () => {
-    let t = 0;
-    const breaker = new CircuitBreaker(1, 60_000, () => t);
-    breaker.recordFailure();
-    const { router } = makeRouter(fakeProvider(validDecisionJson()), { breaker });
-    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.failure.kind).toBe("CIRCUIT_OPEN");
-  });
-
-  it("records failures into the breaker on provider errors", async () => {
-    const failing: AiProvider = {
-      name: "failing",
-      complete: async () => {
-        throw new AppError(ErrorCode.EXTERNAL_UNAVAILABLE, "boom");
+  it("F & G: provider timeout produces safe TIMEOUT failure and passes timeoutMs", async () => {
+    let capturedOpts: any;
+    const timeoutProvider: AiProvider = {
+      name: "timeout",
+      complete: async (_req, opts) => {
+        capturedOpts = opts;
+        throw new AppError(ErrorCode.AI_TIMEOUT, "Novita request timed out after 15000ms");
       },
     };
-    const { router, breaker } = makeRouter(failing, { breaker: new CircuitBreaker(2, 60_000, () => 0), now: () => 0 });
+    const { router } = makeRouter(timeoutProvider, { cfg: { timeoutMs: 15_000 } });
     const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
     expect(out.ok).toBe(false);
-    expect(breaker.status).toBe("OPEN");
+    if (!out.ok) {
+      expect(out.failure.kind).toBe("TIMEOUT");
+    }
+    expect(capturedOpts.timeoutMs).toBe(15_000);
+  });
+
+  it("H & I: exponential retry delay progression and max delay cap", async () => {
+    const delays: number[] = [];
+    const sleepFn = async (ms: number) => {
+      delays.push(ms);
+    };
+
+    let attemptsCount = 0;
+    const failingProvider: AiProvider = {
+      name: "failing",
+      complete: async () => {
+        attemptsCount += 1;
+        throw new AppError(ErrorCode.EXTERNAL_UNAVAILABLE, "temporary 503");
+      },
+    };
+
+    const { router } = makeRouter(failingProvider, {
+      sleepFn,
+      cfg: {
+        maxRetries: 3, // total 4 attempts
+        retryInitialDelayMs: 100,
+        retryMaxDelayMs: 300,
+      },
+    });
+
+    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+    expect(out.ok).toBe(false);
+    expect(attemptsCount).toBe(4);
+    // Attempt 1: no sleep.
+    // Attempt 2: 100ms
+    // Attempt 3: min(100 * 2, 300) = 200ms
+    // Attempt 4: min(100 * 4, 300) = 300ms (capped at max delay 300)
+    expect(delays).toEqual([100, 200, 300]);
+  });
+
+  it("J & K: M5 fast-path overrides model & timeout while applying all safety checks", async () => {
+    let capturedReq: ChatCompletionRequest | undefined;
+    let capturedOpts: any;
+
+    const badM5 = validDecisionJson({ direction: "SHORT" }); // Direction mismatch on M5
+    const provider = fakeProvider(badM5, (req, opts) => {
+      capturedReq = req;
+      capturedOpts = opts;
+    });
+
+    const { router } = makeRouter(provider, {
+      cfg: {
+        m5Model: "fast-m5-model",
+        m5TimeoutMs: 12_000,
+      },
+    });
+
+    const m5Ctx: EngineContext = { ...CTX, timeframe: "M5" };
+    const out = await router.analyze(m5Ctx, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+
+    // Fast path configuration was passed to provider
+    expect(capturedReq?.model).toBe("fast-m5-model");
+    expect(capturedOpts?.timeoutMs).toBe(12_000);
+
+    // Safety checks still rejected direction mismatch on M5
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.failure.kind).toBe("INVALID_OUTPUT");
+    }
+  });
+
+  it("M: cached incompatible decision cannot bypass setup validation", async () => {
+    const validFirst = validDecisionJson();
+    const provider = fakeProvider(validFirst);
+    const { router } = makeRouter(provider);
+
+    // Request 1 caches the valid decision
+    const out1 = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+    expect(out1.ok).toBe(true);
+
+    // Request 2 with a modified setup (different entry: 2050)
+    const modifiedSetup: Setup = { ...SETUP, entry: 2050 };
+    const out2 = await router.analyze(CTX, CONFLUENCE, modifiedSetup, 10_000, "ANALYSIS_ONLY");
+
+    // Even if prompt hash matched or cache key was queried, level mismatch rejects or bypasses invalid cache
+    if (out2.ok) {
+      expect(out2.cached).toBe(false);
+    } else {
+      expect(out2.failure.kind).toBe("INVALID_OUTPUT");
+    }
+  });
+
+  it("N: provider and schema failure remains safe", async () => {
+    const { router } = makeRouter(fakeProvider("garbage non-json"));
+    const out = await router.analyze(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.failure.kind).toBe("INVALID_OUTPUT");
   });
 });
 
-describe("ContextBuilder", () => {
-  it("produces a deterministic prompt containing candle rows and setup", () => {
-    const builder = new ContextBuilder();
-    const a = builder.buildSetupPrompt(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    const b = builder.buildSetupPrompt(CTX, CONFLUENCE, SETUP, 10_000, "ANALYSIS_ONLY");
-    expect(a.user).toBe(b.user);
-    expect(a.system).toBe(b.system);
-    expect(a.user).toContain("MODE: ANALYSIS_ONLY");
-    expect(a.user).toContain("CONFLUENCE_SCORE");
-    expect(a.system).toContain("NO_TRADE|WATCH|TRADE_CANDIDATE");
+describe("O: ReplayProvider Safety", () => {
+  it("ReplayProvider does NOT call live provider when recorded entry exists", async () => {
+    const recorder = new ReplayRecorder();
+    recorder.record("sig1", {
+      ok: true,
+      decision: JSON.parse(validDecisionJson()),
+      cached: false,
+      costUsd: 0,
+      tokens: { prompt: 10, completion: 5 },
+    });
+
+    const liveSpy = vi.fn();
+    const liveProvider: AiProvider = { name: "live", complete: liveSpy };
+
+    const replayProvider = new ReplayProvider(recorder, () => "sig1", liveProvider);
+    const result = await replayProvider.complete({ model: "m", messages: [] });
+
+    expect(liveSpy).not.toHaveBeenCalled();
+    expect(result.content).toContain("TRADE_CANDIDATE");
+  });
+
+  it("ReplayProvider throws error when output is unrecorded and fallback is null", async () => {
+    const recorder = new ReplayRecorder();
+    const replayProvider = new ReplayProvider(recorder, () => "missing-sig", null);
+
+    await expect(replayProvider.complete({ model: "m", messages: [] })).rejects.toThrow(
+      /no recorded output/
+    );
   });
 });

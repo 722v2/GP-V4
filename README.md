@@ -1,106 +1,109 @@
-# GP-V4
+# GP-V4 — XAU/USD Trading & Operations Platform
 
-Modular monolith for **XAU/USD analysis and trading**: Biquiti market data → analysis
-engines → confluence → strong-candle strategy → Novita AI review → risk gate →
-persistence/notification → mode-dependent execution.
+GP-V4 is a modular monolith for **XAU/USD strategy analysis, risk management, and operations**:
+Biquiti Market Data → Analysis Engines (Structure, Liquidity, Price Action) → Confluence Engine → Strong Candle Strategy → Novita AI Router → Risk Engine Gate (Canonical R, drawdown caps, lot sizing) → Persistence & Telegram Alerts → Mode-Dependent Simulated Execution.
 
-Default mode is `ANALYSIS_ONLY`: the system analyses, scores, and reports setups but
-**never originates an order**.
+---
 
-## Status
+## Technical Status & Boundaries
 
-Phase 1 (foundation) and Phase 2 (vertical slice) are complete; Phase 3 (safety) and
-Phase 4 (modes/replay/backtest) are implemented. Live broker execution is intentionally
-**not** wired — the venue contract is external (see `TODO` below). All external
-integrations are behind boundaries with injected transport, so the whole graph runs and
-tests without any credentials.
+- **Core Engine & Safety**: Foundation, confluence engines, AI routing, risk tracking, kill switch (L1/L2/L3), persistent idempotency, and reconciliation are fully implemented.
+- **Operations Console**: Authoritative Arabic RTL Operations Console with SSE live streaming, dashboard, trade audits, risk monitoring, health check, settings, and verification tools.
+- **Execution Boundary**: Execution is strictly **SIMULATED** (internal simulation model with spread, slippage, and latency). **Live Broker execution is NOT connected**.
+- **Historical Validation**: Synthetic fixtures are used for deterministic unit and replay tests. **Real historical validation against 1–2 years of broker ticks/candles has NOT been executed** pending external broker historical data delivery.
+
+---
 
 ## Requirements
 
-- Node.js ≥ 22
-- npm
+- **Node.js**: ≥ 22.0.0
+- **npm**: ≥ 10.0.0
 
-## Commands
+---
+
+## Quick Start & Commands
 
 ```bash
-npm install         # install dependencies
-npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest run
-npm run build       # compile to dist/
-npm run dev         # tsx src/index.ts (dev entrypoint)
-npm start           # node dist/index.js (built entrypoint)
+npm install         # Install dependencies
+npm run typecheck   # Typecheck codebase (strict TypeScript, tsc --noEmit)
+npm test            # Run Vitest test suite (290 tests across 25 suites)
+npm run build       # Compile TypeScript project to dist/
+npm run dev         # Run development server with tsx
+npm start           # Run production built server (node dist/index.js)
 ```
 
-## Architecture
+---
+
+## Architectural Data Flow
 
 ```
-src/
-  config/       AppConfig schema + env source (zod-validated, versioned overrides)
-  core/         domain types, event bus, logger with secret redaction, error taxonomy
-  marketdata/   provider boundary, candle cache, validation, Biquiti adapter
-    biquiti/    field-mapped parser + HTTP adapter (endpoint/field names are config)
-    replay/     in-memory fixture source for deterministic replay/backtest
-  strategies/   analysis engines + confluence + strong-candle strategy + setup store
-    engines/    structure (swings/BOS), liquidity (equal levels/sweeps), price-action
-  ai/           Novita provider, context builder, budget guard, circuit breaker,
-                response cache, AI router, replay provider/recorder
-  risk/         risk engine (lot sizing, verdicts), kill switch (L1/L2/L3)
-  persistence/  repository boundary, Supabase implementation, null repository
-  telegram/     notifier (sendMessage via injected fetch, no-op when disabled)
-  safety/       idempotency guard, reconciliation service
-  execution/    broker-side SL/TP protection boundary (simulated impl)
-  scanner/      symbol×timeframe scan loop with bar-close triggers
-  backtest/     deterministic backtest runner, spread/slippage model, trade lifecycle
-  replay/       drives the live pipeline over fixtures with a virtual clock
-  pipeline/     trading pipeline, signal/plan builders, buildApp composition root
-  index.ts      entrypoint: load config → build graph → run scan loop
+Closed M5 Bar → Scanner → CandleCache 
+              → ConfluenceEngine (Structure + Liquidity + Price Action)
+              → StrongCandleStrategy 
+              → AiRouter (Novita/DeepSeek; can only downgrade/block, cannot size)
+              → RiskEngine (Canonical R, Lot Sizing, Drawdown & Exposure Gates)
+              → Mode Dispatch (ANALYSIS_ONLY / MANUAL_CONFIRMATION / PAPER_TRADING / SIMULATED)
+              → Idempotent Persistence (Supabase / In-Memory)
+              → Real-time EventBus & SSE Stream
 ```
 
-### Data flow (per closed bar)
+### Key Invariants
 
-```
-Scanner → CandleCache → ConfluenceEngine(structure+liquidity+price-action)
-        → StrongCandleStrategy → AiRouter (Novita; can only block/downgrade)
-        → RiskEngine (lot size + verdict) → mode handling
-```
+1. **Closed Bars Only**: The scanner only accepts closed bars. Forward-looking or open bars are rejected.
+2. **Deterministic Risk Budgeting**: Lot size and risk amount are computed strictly by `RiskEngine`. AI cannot modify lot sizes.
+3. **Canonical R-Multiple**: R is computed strictly as $R = \frac{|\text{TakeProfit} - \text{Entry}|}{|\text{Entry} - \text{StopLoss}|}$.
+4. **Persistent Idempotency (P2-12)**: Bar-close triggers, signal IDs, and setup IDs are deterministic and de-duplicated across restarts.
+5. **Fail-Safe & Monotonic Kill Switch**: If downstream subsystems (AI, Persistence, Provider) fail, the engine degrades gracefully without originating unsafe trades.
 
-Key invariants:
+---
 
-- **Closed bars only.** Strategies never see partial bars; `validateCandleSeries` rejects
-  future-closing bars and misaligned timestamps.
-- **No lookahead.** Replay and backtest expose only bars whose `closeTime <= asOf`.
-- **AI cannot size.** Lot size and risk amount are computed solely by the risk engine.
-- **Idempotent.** Setup ids and the idempotency guard de-duplicate bars across restarts.
-- **Fail-safe.** Provider/AI/persistence failures degrade gracefully and never halt the
-  pipeline; the kill switch (L2/L3) blocks new entries.
+## Runtime Modes (`GP_MODE`)
 
-## Modes
+| Mode | Description | Execution Behavior |
+| :--- | :--- | :--- |
+| `ANALYSIS_ONLY` *(Default)* | Analyses and emits signals without originating orders | No order generation |
+| `MANUAL_CONFIRMATION` | Generates candidate plans requiring operator confirmation | Operator review |
+| `PAPER_TRADING` / `SIMULATED` | Simulated order management with spread & slippage | Simulated fills only |
+| `AUTO_TRADING` | Blocked until Live Broker Adapter is integrated in Phase 3.2 | Blocked without Broker |
+| `REPLAY` | Deterministic replay runner over recorded fixtures | Simulated replay clock |
+| `BACKTEST` | Deterministic backtest evaluation runner | Simulated backtest |
 
-`GP_MODE` selects behavior: `ANALYSIS_ONLY` (default), `MANUAL_CONFIRMATION`,
-`AUTO_TRADING`, `PAPER_TRADING`, `REPLAY`, `BACKTEST`. Simulated modes apply the
-spread/slippage/latency model to fills. `AUTO_TRADING` surfaces a candidate but leaves
-order routing to an execution layer that is not yet wired.
+---
 
-## Configuration
+## Configuration & Environment Variables
 
-Copy `.env.example` to `.env` and fill values. Config is validated at startup; missing
-optional integrations degrade to no-ops (Biquiti → scanner warnings, Supabase → null
-repo, Telegram → silent, Novita → AI failures degraded to `AI_BLOCKED`).
+Copy `.env.example` to `.env` and configure required values:
 
-## Tests
+- `GP_MODE`: Runtime mode (`ANALYSIS_ONLY`, `SIMULATED`, etc.)
+- `GP_SYMBOLS`: Target symbol (e.g. `XAUUSD`)
+- `GP_TIMEFRAMES`: Target timeframes (`M5`, `M15`, `H1`)
+- `BIQUITI_BASE_URL` & `BIQUITI_API_KEY`: Market data REST provider credentials
+- `AI_API_KEY` & `AI_MODEL`: Novita AI routing credentials (e.g. `deepseek/deepseek-r1`)
+- `SUPABASE_URL` & `SUPABASE_SERVICE_KEY`: Persistent storage credentials
+- `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`: Notification channel credentials
+- `RISK_ACCOUNT_EQUITY`, `RISK_PER_TRADE_PCT`, `RISK_DAILY_LOSS_CAP_PCT`: Risk engine bounds
 
-129 tests across config, market data, strategy engines, confluence, AI router/cache/
-breaker, risk, persistence/telegram, safety, backtest, replay, and the end-to-end
-pipeline. Run with `npm test`.
+---
 
-## TODO / blocked on external information
+## Supabase Database Migrations
 
-- **Biquiti API contract** — endpoint paths, field names, auth header format, symbol map.
-  All configurable via env; the parser assumes a configurable field map.
-- **Novita** — base URL, model id, and pricing constants for accurate cost estimation.
-- **Supabase** — project URL + service key, and the SQL schema (tables `setups`,
-  `ai_decisions`, `trades`).
-- **Telegram** — bot token and chat id.
-- **Live broker venue** — order routing, position state, and server-side SL/TP
-  (the `BrokerProtection` boundary is implemented for simulated modes only).
-- **Reconciliation** — the live-venue leg is a stub until the broker contract is known.
+SQL migration files are located in `supabase/migrations/`:
+- `20261005000000_create_kill_switch.sql` — Kill switch state table with RLS.
+- `20261005000001_create_signals_table.sql` — Idempotent deterministic signals table with RLS.
+- `20261005000002_create_core_tables.sql` — Core operational tables (`setups`, `ai_decisions`, `trades`) with RLS.
+
+*Note: Migrations are verified locally. Remote Supabase application requires running migrations against the live project instance.*
+
+---
+
+## External Integrations & Verification Status
+
+| Integration | Implementation Status | Production Verification Status |
+| :--- | :--- | :--- |
+| **Biquiti Market Data** | Complete `BiquitiAdapter` | `UNVERIFIED` (Requires live API credentials & contract confirmation) |
+| **Novita AI Router** | Complete `AiRouter` & `NovitaProvider` | `UNVERIFIED` (Requires live Novita API key) |
+| **Supabase DB** | Complete `SupabaseRepository` & `RetryingRepository` | `UNVERIFIED` (Requires live Supabase project connection) |
+| **Telegram Bot** | Complete `TelegramNotifier` | `UNVERIFIED` (Requires live bot token & chat ID) |
+| **Live Broker** | Not Wired (Phase 3.2 Scope) | `NOT CONNECTED` |
+| **Historical Validation**| Complete Walk-Forward Evaluator | `NOT EXECUTED` (Requires 1–2 years of broker tick data) |
+| **Render Deployment** | Complete server host & port binding | `UNVERIFIED` (Requires live Render service deployment) |

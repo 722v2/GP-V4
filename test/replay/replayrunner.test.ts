@@ -41,19 +41,22 @@ const RISK: RiskConfig = {
 
 const approvingAi: AiProvider = {
   name: "approve",
-  complete: async (): Promise<AiProviderResult> => ({
-    content: JSON.stringify({
-      decision: "TRADE_CANDIDATE",
-      direction: "LONG",
-      confidence: 0.7,
-      evidence: [],
-      risk_notes: [],
-      reassessment_conditions: [],
-      reason_codes: [],
-    }),
-    usage: { prompt: 10, completion: 5 },
-    model: "test",
-  }),
+  complete: async (req): Promise<AiProviderResult> => {
+    const isShort = req.messages.some((m) => m.content.includes('"direction":"SHORT"'));
+    return {
+      content: JSON.stringify({
+        decision: "TRADE_CANDIDATE",
+        direction: isShort ? "SHORT" : "LONG",
+        confidence: 0.7,
+        evidence: [],
+        risk_notes: [],
+        reassessment_conditions: [],
+        reason_codes: [],
+      }),
+      usage: { prompt: 10, completion: 5 },
+      model: "test",
+    };
+  },
 };
 
 function makeReplayPipeline() {

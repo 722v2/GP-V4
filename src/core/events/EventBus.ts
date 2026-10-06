@@ -21,6 +21,13 @@ export class EventBus {
     this.handlers.set(eventName, list);
   }
 
+  off(eventName: EventName, subscriberName: string): void {
+    const list = this.handlers.get(eventName);
+    if (!list) return;
+    const filtered = list.filter((item) => item.subscriberName !== subscriberName);
+    this.handlers.set(eventName, filtered);
+  }
+
   async publish<T>(event: SystemEvent<T>): Promise<void> {
     const list = this.handlers.get(event.name);
     if (!list) return;

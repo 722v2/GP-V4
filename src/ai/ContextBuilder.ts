@@ -2,6 +2,7 @@ import type { Candle } from "../core/types/Candle.js";
 import type { ConfluenceResult } from "../strategies/ConfluenceEngine.js";
 import type { Setup } from "../core/types/Setup.js";
 import type { EngineContext } from "../strategies/Engine.js";
+import type { ExperienceInsight } from "../core/memory/ExperienceMemory.js";
 
 /**
  * Builds the analysis prompt for the AI router. Deterministic: same inputs →
@@ -15,7 +16,8 @@ export class ContextBuilder {
     confluence: ConfluenceResult,
     setup: Setup,
     accountEquity: number,
-    mode: string
+    mode: string,
+    expInsight?: ExperienceInsight
   ): { system: string; user: string } {
     const candles = ctx.candles.slice(-this.maxCandles);
     const rows = candles
@@ -25,6 +27,11 @@ export class ContextBuilder {
       .map((e) => `- [${e.source}] ${e.kind}: ${e.detail} (weight ${e.weight.toFixed(2)})`)
       .join("\n");
     const levels = confluence.levels.map((l) => `${l.kind}@${l.price.toFixed(2)}`).join(", ");
+
+    let expSection = "";
+    if (expInsight && expInsight.sampleSize > 0) {
+      expSection = `\nEXPERIENCE_MEMORY: sample_size=${expInsight.sampleSize}, win_rate=${(expInsight.winRate * 100).toFixed(1)}%, avg_R=${expInsight.avgR.toFixed(2)}, recommendation=${expInsight.recommendation}`;
+    }
 
     const system = [
       "You are a disciplined XAU/USD trading analyst.",
@@ -43,6 +50,7 @@ export class ContextBuilder {
       `LEVELS: ${levels || "none"}`,
       "EVIDENCE:",
       evidence || "- none",
+      expSection ? `EXPERIENCE INSIGHTS:${expSection}` : "",
       "STRATEGY SETUP:",
       JSON.stringify({
         id: setup.id,
@@ -55,7 +63,7 @@ export class ContextBuilder {
       }),
       "CLOSED CANDLES (UTC open time,OHLCV, most recent last):",
       rows,
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 
     return { system, user };
   }

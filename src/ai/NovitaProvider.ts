@@ -31,13 +31,14 @@ export class NovitaProvider implements AiProvider {
     return this.cfg.baseUrl !== "" && this.cfg.apiKey !== "" && this.cfg.model !== "";
   }
 
-  async complete(req: ChatCompletionRequest, opts: { signal?: AbortSignal } = {}): Promise<AiProviderResult> {
+  async complete(req: ChatCompletionRequest, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<AiProviderResult> {
     if (!this.isConfigured()) {
       throw new AppError(ErrorCode.EXTERNAL_UNAVAILABLE, "Novita provider not configured — set NOVITA_BASE_URL, NOVITA_API_KEY, NOVITA_MODEL");
     }
     const url = new URL("/v3/openai/chat/completions", this.cfg.baseUrl).toString();
+    const timeoutMs = opts.timeoutMs ?? this.cfg.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const signal = opts.signal ?? controller.signal;
 
     let res: Response;
@@ -48,12 +49,12 @@ export class NovitaProvider implements AiProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.cfg.apiKey}`,
         },
-        body: JSON.stringify({ ...req, model: this.cfg.model }),
+        body: JSON.stringify({ ...req, model: req.model || this.cfg.model }),
         signal,
       });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
-        throw new AppError(ErrorCode.AI_TIMEOUT, `Novita request timed out after ${this.cfg.timeoutMs}ms`);
+        throw new AppError(ErrorCode.AI_TIMEOUT, `Novita request timed out after ${timeoutMs}ms`);
       }
       throw new AppError(ErrorCode.EXTERNAL_UNAVAILABLE, "Novita request failed", undefined, err);
     } finally {
