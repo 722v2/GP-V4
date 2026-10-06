@@ -216,7 +216,7 @@ export class BacktestRunner {
     this.store.appendBatch(sorted);
 
     const symbol = sorted[0]?.symbol ?? "XAUUSD";
-    const timeframe = sorted[0]?.timeframe ?? "M5";
+    const timeframe = sorted[0]?.timeframe ?? "M1";
 
     for (let i = this.warmupBars; i < sorted.length; i++) {
       const current = sorted[i]!;
@@ -296,7 +296,7 @@ export class BacktestRunner {
 
   /** The default decision path: confluence -> strategy -> risk, with AI skipped (replayable offline). */
   private async decideDefault(ctx: { symbol: string; timeframe: string; candles: readonly Candle[] }): Promise<BacktestCycle["outcome"]> {
-    const engineCtx = { symbol: ctx.symbol, timeframe: ctx.candles[0]?.timeframe ?? "M5", candles: ctx.candles };
+    const engineCtx = { symbol: ctx.symbol, timeframe: ctx.candles[0]?.timeframe ?? "M1", candles: ctx.candles };
     const conf = this.confluence.evaluate(engineCtx as Parameters<typeof this.confluence.evaluate>[0]);
     const setup = this.strategy.evaluate(engineCtx as Parameters<typeof this.strategy.evaluate>[0], conf.direction);
     const last = ctx.candles[ctx.candles.length - 1];

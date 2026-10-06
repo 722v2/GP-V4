@@ -1,5 +1,6 @@
 import type { Direction, Evidence } from "../core/types/Setup.js";
 import type { AnalysisEngine, EngineContext, EngineLevel, EngineOutput } from "./Engine.js";
+import type { MtfContext } from "./mtf/MtfContext.js";
 
 export interface ConfluenceResult {
   /** Net score (sum of signed weights). Positive = long bias, negative = short. */
@@ -14,6 +15,8 @@ export interface ConfluenceResult {
   readonly perEngine: readonly EngineOutput[];
   /** Distinct engine IDs that independently supported the resolved direction. */
   readonly supportingEngines?: readonly string[];
+  /** Attached MTF context if available. */
+  readonly mtfContext?: MtfContext;
 }
 
 export interface ConfluenceConfig {
@@ -35,13 +38,9 @@ export const DEFAULT_CONFLUENCE_CONFIG: ConfluenceConfig = {
 };
 
 /**
- * Confluence engine: runs every analysis engine over the same closed-bar context,
- * aggregates their signed evidence, and resolves a directional bias. Pure and
- * deterministic — the same candles always produce the same verdict.
- *
- * Invariant (P1-1): A single engine (e.g. momentum / strong-candle) alone cannot
- * establish trade direction. Directional trade evidence requires support from at least
- * two sufficiently independent engines.
+ * Confluence engine: runs every analysis engine over the primary closed-bar context,
+ * incorporates higher-timeframe context evidence if provided, aggregates signed evidence,
+ * and resolves a directional bias. Pure and deterministic — the same inputs produce the same verdict.
  */
 export class ConfluenceEngine {
   constructor(
@@ -49,7 +48,7 @@ export class ConfluenceEngine {
     private readonly cfg: ConfluenceConfig = DEFAULT_CONFLUENCE_CONFIG
   ) {}
 
-  evaluate(ctx: EngineContext): ConfluenceResult {
+  evaluate(ctx: EngineContext, mtfContext?: MtfContext): ConfluenceResult {
     const perEngine: EngineOutput[] = [];
     const evidence: Evidence[] = [];
     const levels: EngineLevel[] = [];
@@ -59,6 +58,51 @@ export class ConfluenceEngine {
       perEngine.push(out);
       levels.push(...(out.levels ?? []));
       evidence.push(...out.evidence);
+    }
+
+    // Add higher-timeframe context evidence if provided
+    if (mtfContext) {
+      if (mtfContext.m5) {
+        const weight = mtfContext.m5.trend === "BULLISH" ? 0.3 : mtfContext.m5.trend === "BEARISH" ? -0.3 : 0;
+        if (weight !== 0) {
+          const ev: Evidence = {
+            source: "mtf-m5",
+            kind: mtfContext.m5.trend === "BULLISH" ? "m5-bullish-context" : "m5-bearish-context",
+            detail: mtfContext.m5.rationale,
+            weight,
+          };
+          evidence.push(ev);
+          perEngine.push({ engine: "mtf-m5", evidence: [ev] });
+        }
+      }
+
+      if (mtfContext.m15) {
+        const weight = mtfContext.m15.trend === "BULLISH" ? 0.3 : mtfContext.m15.trend === "BEARISH" ? -0.3 : 0;
+        if (weight !== 0) {
+          const ev: Evidence = {
+            source: "mtf-m15",
+            kind: mtfContext.m15.trend === "BULLISH" ? "m15-bullish-context" : "m15-bearish-context",
+            detail: mtfContext.m15.rationale,
+            weight,
+          };
+          evidence.push(ev);
+          perEngine.push({ engine: "mtf-m15", evidence: [ev] });
+        }
+      }
+
+      if (mtfContext.h1) {
+        const weight = mtfContext.h1.trend === "BULLISH" ? 0.2 : mtfContext.h1.trend === "BEARISH" ? -0.2 : 0;
+        if (weight !== 0) {
+          const ev: Evidence = {
+            source: "mtf-h1",
+            kind: mtfContext.h1.trend === "BULLISH" ? "h1-bullish-context" : "h1-bearish-context",
+            detail: mtfContext.h1.rationale,
+            weight,
+          };
+          evidence.push(ev);
+          perEngine.push({ engine: "mtf-h1", evidence: [ev] });
+        }
+      }
     }
 
     const score = totalScore(evidence);
@@ -99,6 +143,7 @@ export class ConfluenceEngine {
       levels,
       perEngine,
       supportingEngines: uniqueSupporting,
+      mtfContext,
     };
   }
 

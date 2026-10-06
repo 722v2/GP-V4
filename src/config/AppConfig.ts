@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const DEFAULT_SYMBOLS = ["XAUUSD"];
-const DEFAULT_TIMEFRAMES = ["M5", "M15", "H1"];
+const DEFAULT_TIMEFRAMES = ["M1", "M5", "M15", "H1"];
 
 export const AppConfigSchema = z.object({
   mode: z.enum(["ANALYSIS_ONLY", "MANUAL_CONFIRMATION", "AUTO_TRADING", "PAPER_TRADING", "REPLAY", "BACKTEST"]),

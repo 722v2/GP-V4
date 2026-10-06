@@ -5,8 +5,8 @@ import type { EngineContext } from "../strategies/Engine.js";
 import type { ExperienceInsight } from "../core/memory/ExperienceMemory.js";
 
 /**
- * Builds the analysis prompt for the AI router. Deterministic: same inputs →
- * same prompt string, which makes responses cacheable and replays consistent.
+ * Builds the analysis prompt for the AI router with structured MTF context.
+ * Deterministic: same inputs → same prompt string, keeping responses cacheable and replays consistent.
  */
 export class ContextBuilder {
   constructor(private readonly maxCandles = 100) {}
@@ -33,6 +33,24 @@ export class ContextBuilder {
       expSection = `\nEXPERIENCE_MEMORY: sample_size=${expInsight.sampleSize}, win_rate=${(expInsight.winRate * 100).toFixed(1)}%, avg_R=${expInsight.avgR.toFixed(2)}, recommendation=${expInsight.recommendation}`;
     }
 
+    let htfSection = "";
+    if (confluence.mtfContext) {
+      const mtf = confluence.mtfContext;
+      const parts: string[] = [];
+      if (mtf.m5) {
+        parts.push(`M5 Context: ${mtf.m5.trend} trend (score ${mtf.m5.score.toFixed(2)}, regime: ${mtf.m5.regime}, last close: ${mtf.m5.lastClose.toFixed(2)})`);
+      }
+      if (mtf.m15) {
+        parts.push(`M15 Context: ${mtf.m15.trend} trend (score ${mtf.m15.score.toFixed(2)}, regime: ${mtf.m15.regime}, last close: ${mtf.m15.lastClose.toFixed(2)})`);
+      }
+      if (mtf.h1) {
+        parts.push(`H1 Macro Context: ${mtf.h1.trend} trend (score ${mtf.h1.score.toFixed(2)}, regime: ${mtf.h1.regime}, last close: ${mtf.h1.lastClose.toFixed(2)})`);
+      }
+      if (parts.length > 0) {
+        htfSection = "HIGHER-TIMEFRAME CONTEXT (M5, M15, H1):\n" + parts.map((p) => `- ${p}`).join("\n");
+      }
+    }
+
     const system = [
       "You are a disciplined XAU/USD trading analyst.",
       "Respond ONLY with a single JSON object matching this schema:",
@@ -44,14 +62,15 @@ export class ContextBuilder {
 
     const user = [
       `MODE: ${mode}`,
-      `SYMBOL: ${ctx.symbol} TF: ${ctx.timeframe}`,
+      `PRIMARY SIGNAL TIMEFRAME: ${ctx.timeframe} (Symbol: ${ctx.symbol})`,
       `ACCOUNT_EQUITY_USD: ${accountEquity}`,
       `CONFLUENCE_SCORE: ${confluence.score.toFixed(2)} (direction: ${confluence.direction ?? "none"})`,
       `LEVELS: ${levels || "none"}`,
+      htfSection,
       "EVIDENCE:",
       evidence || "- none",
       expSection ? `EXPERIENCE INSIGHTS:${expSection}` : "",
-      "STRATEGY SETUP:",
+      "PRIMARY STRATEGY SETUP:",
       JSON.stringify({
         id: setup.id,
         direction: setup.direction,
@@ -61,7 +80,7 @@ export class ContextBuilder {
         takeProfit2: setup.takeProfit2,
         rationale: setup.rationale,
       }),
-      "CLOSED CANDLES (UTC open time,OHLCV, most recent last):",
+      "PRIMARY CLOSED CANDLES (UTC open time,OHLCV, most recent last):",
       rows,
     ].filter(Boolean).join("\n");
 

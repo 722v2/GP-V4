@@ -190,10 +190,10 @@ export class AiRouter {
       return fail({ kind: "CIRCUIT_OPEN", message: "AI circuit breaker is open after repeated failures" });
     }
 
-    // M5 fast-path routing configuration
-    const isM5 = ctx.timeframe === "M5";
-    const selectedTimeoutMs = isM5 && this.cfg.m5TimeoutMs ? this.cfg.m5TimeoutMs : this.cfg.timeoutMs;
-    const selectedModel = isM5 && this.cfg.m5Model ? this.cfg.m5Model : "";
+    // Primary execution timeframe fast-path routing configuration
+    const isPrimaryFastPath = ctx.timeframe === "M1" || ctx.timeframe === "M5";
+    const selectedTimeoutMs = isPrimaryFastPath && this.cfg.m5TimeoutMs ? this.cfg.m5TimeoutMs : this.cfg.timeoutMs;
+    const selectedModel = isPrimaryFastPath && this.cfg.m5Model ? this.cfg.m5Model : "";
 
     const { system, user } = this.contextBuilder.buildSetupPrompt(ctx, confluence, setup, accountEquity, mode, expInsight);
     const key = ResponseCache.signature(system, user);

@@ -25,6 +25,7 @@ import type { AccountCapitalSource } from "../risk/AccountCapital.js";
 import type { MarketFilterEngine } from "../filters/MarketFilterEngine.js";
 import type { ExperienceMemory } from "../core/memory/ExperienceMemory.js";
 import type { ExecutionEngine } from "../execution/ExecutionEngine.js";
+import { buildMtfContext } from "../strategies/mtf/MtfContext.js";
 
 export interface PipelineDeps {
   readonly bus: EventBus;
@@ -60,6 +61,8 @@ export interface PipelineDeps {
   readonly experienceMemory?: ExperienceMemory;
   /** Real broker execution engine for AUTO_TRADING. */
   readonly executionEngine?: ExecutionEngine;
+  /** Optional override to allow non-M1 primary setups in legacy unit tests (default false). */
+  readonly allowNonM1Primary?: boolean;
 }
 
 export interface SimulatedFill {
@@ -115,8 +118,15 @@ export class TradingPipeline {
       }
     }
 
+    const hasM1Candles = cache.get(symbol, "M1").length > 0;
+    // Non-M1 timeframes (M5, M15, H1) serve as MTF context data and do not initiate entry setups independently when M1 data is present.
+    if (timeframe !== "M1" && hasM1Candles && !this.deps.allowNonM1Primary) {
+      return { ...base, setup: null, ai: null, risk: null, action: { kind: "NO_SETUP" }, reasons: ["higher timeframe bar processed for MTF context only"] };
+    }
+
     const ctx = { symbol, timeframe, candles };
-    const conf: ConfluenceResult = confluence.evaluate(ctx);
+    const mtfContext = buildMtfContext(cache, symbol, barOpenTime);
+    const conf: ConfluenceResult = confluence.evaluate(ctx, mtfContext);
     await bus.publish({ name: "scan.completed", timestamp: this.now(), payload: { symbol, timeframe, score: conf.score } });
 
     const setup = strategy.evaluate(ctx, conf.direction);

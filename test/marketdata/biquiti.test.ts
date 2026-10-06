@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { parseBiquitiCandles, BiquitiAdapter, DEFAULT_FIELD_MAP } from "../../src/marketdata/biquiti/BiquitiAdapter.js";
+import {
+  parseBiquitiCandles,
+  BiquitiAdapter,
+  DEFAULT_FIELD_MAP,
+  BIQUOTE_TIMEFRAME_MAP,
+} from "../../src/marketdata/biquiti/BiquitiAdapter.js";
 import { validateCandleSeries, CandleValidationError } from "../../src/marketdata/validation.js";
 import { CandleCache } from "../../src/marketdata/CandleCache.js";
 import type { Candle, CandleSeries } from "../../src/core/types/Candle.js";
 import { createConsoleLogger } from "../../src/core/logging/Logger.js";
 
-const NOW = 1_700_000_000_000;
+const NOW = 1_762_443_000_000;
 
 function mkCandle(over: Partial<Candle> & Pick<Candle, "openTime" | "open" | "high" | "low" | "close">): Candle {
   return {
@@ -21,27 +26,69 @@ function mkSeries(candles: Candle[]): CandleSeries {
   return { symbol: "XAUUSD", timeframe: "M5", candles };
 }
 
-describe("parseBiquitiCandles", () => {
-  const raw = [
-    { openTime: 1_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
-    { openTime: 1_300_000, open: 1.5, high: 2.5, low: 1.2, close: 2.0, volume: 12 },
+describe("parseBiquitiCandles (Biquote.io parser)", () => {
+  const rawBiquote = [
+    {
+      openTime: "2026-10-06T15:00:00Z",
+      open: 4156.501,
+      high: 4163.618,
+      low: 4155.783,
+      close: 4160.845,
+      volume: 0,
+      tickVolume: 964,
+      isOpen: false,
+    },
+    {
+      openTime: "2026-10-06T15:05:00Z",
+      open: 4160.948,
+      high: 4163.997,
+      low: 4159.252,
+      close: 4160.527,
+      volume: 0,
+      tickVolume: 826,
+      isOpen: false,
+    },
+    {
+      openTime: "2026-10-06T15:10:00Z",
+      open: 4160.578,
+      high: 4162.78,
+      low: 4160.45,
+      close: 4162.477,
+      volume: 0,
+      tickVolume: 173,
+      isOpen: true, // Currently-open bar
+    },
   ];
 
-  it("maps fields and drops the currently-open bar", () => {
-    const now = 1_300_000 + 100_000; // second bar still open
-    const out = parseBiquitiCandles(raw, "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.openTime).toBe(1_000);
-    expect(out[0]!.closeTime).toBe(300_999);
+  it("parses Biquote ISO 8601 openTime, maps tickVolume when volume is 0, and drops isOpen: true", () => {
+    const now = Date.parse("2026-10-06T15:12:00Z");
+    const out = parseBiquitiCandles(rawBiquote, "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now });
+
+    expect(out).toHaveLength(2); // Drops isOpen: true bar
+    expect(out[0]!.openTime).toBe(Date.parse("2026-10-06T15:00:00Z"));
+    expect(out[0]!.closeTime).toBe(Date.parse("2026-10-06T15:00:00Z") + 300_000 - 1);
+    expect(out[0]!.open).toBe(4156.501);
+    expect(out[0]!.close).toBe(4160.845);
+    expect(out[0]!.volume).toBe(964); // Fallback to tickVolume
+    expect(out[1]!.openTime).toBe(Date.parse("2026-10-06T15:05:00Z"));
   });
 
-  it("sorts ascending regardless of input order", () => {
-    const out = parseBiquitiCandles([raw[1]!, raw[0]!], "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now: NOW });
-    expect(out.map((c) => c.openTime)).toEqual([1_000, 1_300_000]);
+  it("sorts candles ascending (oldest first) regardless of input order", () => {
+    const now = Date.parse("2026-10-06T15:12:00Z");
+    const reversed = [rawBiquote[1]!, rawBiquote[0]!];
+    const out = parseBiquitiCandles(reversed, "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now });
+
+    expect(out.map((c) => c.openTime)).toEqual([
+      Date.parse("2026-10-06T15:00:00Z"),
+      Date.parse("2026-10-06T15:05:00Z"),
+    ]);
   });
 
-  it("throws a typed contract error on missing field", () => {
-    expect(() => parseBiquitiCandles([{ openTime: 1, open: 1 }], "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now: NOW })).toThrow(/missing or non-numeric/);
+  it("throws a typed contract error on missing/invalid numeric fields", () => {
+    const testNow = Date.parse("2026-10-06T16:00:00Z");
+    expect(() =>
+      parseBiquitiCandles([{ openTime: "2026-10-06T15:00:00Z", open: "invalid" }], "XAUUSD", "M5", DEFAULT_FIELD_MAP, { now: testNow })
+    ).toThrow(/missing or non-numeric/);
   });
 });
 
@@ -103,53 +150,153 @@ describe("CandleCache", () => {
   });
 });
 
-describe("BiquitiAdapter", () => {
+describe("BiquitiAdapter (Biquote.io API Integration)", () => {
   const cfg = {
-    baseUrl: "https://api.example.com",
-    apiKey: "k1",
-    candlesPath: "/v1/candles",
+    baseUrl: "https://biquote.io",
+    apiKey: "",
+    candlesPath: "/api/{symbol}/ohlc",
     authHeader: "Authorization",
-    symbolMap: { XAUUSD: "GOLD" },
+    symbolMap: { XAUUSD: "XAUUSD" },
     timeoutMs: 1000,
   };
 
-  it("reports not-configured health when required config is missing", async () => {
-    const adapter = new BiquitiAdapter({ ...cfg, baseUrl: "" }, createConsoleLogger("test"));
+  const logger = createConsoleLogger("test-biquote");
+
+  it("timeframe mapping maps M5 -> 5m, M15 -> 15m, H1 -> 1h", () => {
+    expect(BIQUOTE_TIMEFRAME_MAP.M5).toBe("5m");
+    expect(BIQUOTE_TIMEFRAME_MAP.M15).toBe("15m");
+    expect(BIQUOTE_TIMEFRAME_MAP.H1).toBe("1h");
+  });
+
+  it("reports not-configured health when baseUrl is missing", async () => {
+    const adapter = new BiquitiAdapter({ ...cfg, baseUrl: "" }, logger);
     expect(adapter.isConfigured()).toBe(false);
     const h = await adapter.health();
     expect(h.ok).toBe(false);
     await expect(adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 })).rejects.toThrow(/not configured/);
   });
 
-  it("fetches, maps, validates and returns normalized series", async () => {
-    const now = Date.now();
-    const tf = 300_000;
-    const open = Math.floor(now / tf) * tf - 2 * tf;
-    const raw = [0, 1].map((i) => ({
-      openTime: open + i * tf,
-      open: 2000 + i,
-      high: 2010 + i,
-      low: 1990 + i,
-      close: 2005 + i,
-      volume: 50 + i,
-    }));
+  it("constructs correct M5 request URL: /api/XAUUSD/ohlc?interval=5m&limit=10", async () => {
     let capturedUrl = "";
+    const now = Date.parse("2026-10-06T15:15:00Z");
+
+    const responseBody = {
+      symbol: "XAUUSD",
+      interval: "5m",
+      bars: [
+        { openTime: "2026-10-06T15:00:00Z", open: 2000, high: 2010, low: 1990, close: 2005, volume: 0, tickVolume: 50, isOpen: false },
+        { openTime: "2026-10-06T15:05:00Z", open: 2005, high: 2015, low: 1995, close: 2010, volume: 0, tickVolume: 60, isOpen: false },
+      ],
+    };
+
     const fetchImpl = (async (url: string | URL | Request) => {
       capturedUrl = String(url);
-      return new Response(JSON.stringify({ data: raw }), { status: 200 });
+      return new Response(JSON.stringify(responseBody), { status: 200 });
     }) as typeof fetch;
-    const adapter = new BiquitiAdapter(cfg, createConsoleLogger("test"), fetchImpl);
+
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
     const series = await adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 });
+
+    expect(capturedUrl).toBe("https://biquote.io/api/XAUUSD/ohlc?interval=5m&limit=10");
     expect(series.symbol).toBe("XAUUSD");
+    expect(series.timeframe).toBe("M5");
     expect(series.candles).toHaveLength(2);
-    expect(series.candles[0]!.volume).toBe(50);
-    expect(capturedUrl).toContain("symbol=GOLD");
-    expect(capturedUrl).toContain("interval=M5");
+  });
+
+  it("constructs correct M15 request URL: /api/XAUUSD/ohlc?interval=15m&limit=5", async () => {
+    let capturedUrl = "";
+    const responseBody = {
+      symbol: "XAUUSD",
+      interval: "15m",
+      bars: [
+        { openTime: "2026-10-06T14:30:00Z", open: 2000, high: 2010, low: 1990, close: 2005, volume: 0, tickVolume: 150, isOpen: false },
+      ],
+    };
+
+    const fetchImpl = (async (url: string | URL | Request) => {
+      capturedUrl = String(url);
+      return new Response(JSON.stringify(responseBody), { status: 200 });
+    }) as typeof fetch;
+
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
+    const series = await adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M15", limit: 5 });
+
+    expect(capturedUrl).toBe("https://biquote.io/api/XAUUSD/ohlc?interval=15m&limit=5");
+    expect(series.timeframe).toBe("M15");
+  });
+
+  it("constructs correct H1 request URL: /api/XAUUSD/ohlc?interval=1h&limit=24", async () => {
+    let capturedUrl = "";
+    const responseBody = {
+      symbol: "XAUUSD",
+      interval: "1h",
+      bars: [
+        { openTime: "2026-10-06T13:00:00Z", open: 2000, high: 2010, low: 1990, close: 2005, volume: 0, tickVolume: 500, isOpen: false },
+      ],
+    };
+
+    const fetchImpl = (async (url: string | URL | Request) => {
+      capturedUrl = String(url);
+      return new Response(JSON.stringify(responseBody), { status: 200 });
+    }) as typeof fetch;
+
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
+    const series = await adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "H1", limit: 24 });
+
+    expect(capturedUrl).toBe("https://biquote.io/api/XAUUSD/ohlc?interval=1h&limit=24");
+    expect(series.timeframe).toBe("H1");
+  });
+
+  it("handles empty response ({ bars: [] })", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ bars: [] }), { status: 200 })) as typeof fetch;
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
+    await expect(adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 })).rejects.toThrow(/series is empty/);
+  });
+
+  it("handles malformed JSON / missing bar array response", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ status: "ok", result: "none" }), { status: 200 })) as typeof fetch;
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
+    await expect(adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 })).rejects.toThrow(/could not locate candle array/);
   });
 
   it("surfaces provider HTTP errors as typed errors", async () => {
-    const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
-    const adapter = new BiquitiAdapter(cfg, createConsoleLogger("test"), fetchImpl);
+    const fetchImpl = (async () => new Response("Internal Server Error", { status: 500 })) as typeof fetch;
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
     await expect(adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 })).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("handles timeout gracefully when request takes longer than timeoutMs", async () => {
+    const slowFetch = (async (_url: string, opts?: { signal?: AbortSignal }) => {
+      return new Promise<Response>((_resolve, reject) => {
+        if (opts?.signal) {
+          opts.signal.addEventListener("abort", () => {
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as typeof fetch;
+
+    const shortCfg = { ...cfg, timeoutMs: 50 };
+    const adapter = new BiquitiAdapter(shortCfg, logger, slowFetch);
+    await expect(adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 })).rejects.toThrow(/timed out/);
+  });
+
+  it("filters out currently-open candles and prevents lookahead", async () => {
+    const now = Date.parse("2026-10-06T15:08:00Z");
+    const responseBody = {
+      bars: [
+        { openTime: "2026-10-06T15:00:00Z", open: 2000, high: 2010, low: 1990, close: 2005, volume: 10, isOpen: false },
+        { openTime: "2026-10-06T15:05:00Z", open: 2005, high: 2015, low: 1995, close: 2010, volume: 12, isOpen: true }, // open!
+      ],
+    };
+
+    const fetchImpl = (async () => new Response(JSON.stringify(responseBody), { status: 200 })) as typeof fetch;
+    const adapter = new BiquitiAdapter(cfg, logger, fetchImpl);
+    const series = await adapter.fetchCandles({ symbol: "XAUUSD", timeframe: "M5", limit: 10 });
+
+    expect(series.candles).toHaveLength(1);
+    expect(series.candles[0]!.openTime).toBe(Date.parse("2026-10-06T15:00:00Z"));
   });
 });

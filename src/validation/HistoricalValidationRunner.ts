@@ -32,7 +32,7 @@ export class HistoricalValidationRunner {
     opts: HistoricalValidationOptions
   ): Promise<HistoricalValidationReport> {
     const symbol = (opts.symbol as string) ?? candles[0]?.symbol ?? "XAUUSD";
-    const timeframe = (opts.timeframe as string) ?? candles[0]?.timeframe ?? "M5";
+    const timeframe = (opts.timeframe as string) ?? candles[0]?.timeframe ?? "M1";
     const datasetId = opts.datasetId ?? `ds:${symbol}:${timeframe}:${candles.length}`;
     const isRealBrokerData = opts.isRealBrokerData ?? false;
 
@@ -53,7 +53,7 @@ export class HistoricalValidationRunner {
     const strategyEngine = new StrongCandleStrategy();
 
     const unfilteredResult = await unfilteredRunner.runWith(async (ctx) => {
-      const engineCtx = { symbol: ctx.symbol, timeframe: ctx.candles[0]?.timeframe ?? "M5", candles: ctx.candles };
+      const engineCtx = { symbol: ctx.symbol, timeframe: ctx.candles[0]?.timeframe ?? "M1", candles: ctx.candles };
       const setup = strategyEngine.evaluate(engineCtx as Parameters<typeof strategyEngine.evaluate>[0], "LONG") ?? strategyEngine.evaluate(engineCtx as Parameters<typeof strategyEngine.evaluate>[0], "SHORT");
       const last = ctx.candles[ctx.candles.length - 1];
       const base = { symbol: ctx.symbol, timeframe: engineCtx.timeframe, barOpenTime: last?.openTime ?? 0, setup };

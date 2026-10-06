@@ -64,7 +64,8 @@ export function renderDashboardView(): string {
               </span>
               <!-- Timeframe Selector -->
               <div class="flex items-center bg-slate-900 border border-slate-800 rounded p-0.5 text-[11px]">
-                <button type="button" onclick="selectTimeframe('M5')" id="tf-M5" class="px-2 py-0.5 rounded font-bold transition bg-amber-500 text-black">M5</button>
+                <button type="button" onclick="selectTimeframe('M1')" id="tf-M1" class="px-2 py-0.5 rounded font-bold transition bg-amber-500 text-black">M1 (PRIMARY)</button>
+                <button type="button" onclick="selectTimeframe('M5')" id="tf-M5" class="px-2 py-0.5 rounded text-slate-400 hover:text-white transition">M5</button>
                 <button type="button" onclick="selectTimeframe('M15')" id="tf-M15" class="px-2 py-0.5 rounded text-slate-400 hover:text-white transition">M15</button>
                 <button type="button" onclick="selectTimeframe('H1')" id="tf-H1" class="px-2 py-0.5 rounded text-slate-400 hover:text-white transition">H1</button>
               </div>

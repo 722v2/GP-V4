@@ -607,7 +607,8 @@ export function startWebServer(opts: ServerOptions): http.Server {
         const rawPositions = app.positionManager.openPositions;
         const positions = rawPositions.map((pos) => {
           const sym = (pos.symbol ?? "XAUUSD") as Symbol;
-          const candles = app.cache.get(sym, "M5");
+          const candlesM1 = app.cache.get(sym, "M1");
+          const candles = candlesM1.length > 0 ? candlesM1 : app.cache.get(sym, "M5");
           const latestCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
           const currentPrice = latestCandle ? latestCandle.close : null;
 
@@ -757,7 +758,7 @@ export function startWebServer(opts: ServerOptions): http.Server {
           return;
         }
         const symbol = (url.searchParams.get("symbol") ?? "XAUUSD") as Symbol;
-        const timeframe = (url.searchParams.get("timeframe") ?? "M5") as Timeframe;
+        const timeframe = (url.searchParams.get("timeframe") ?? "M1") as Timeframe;
         const limitParam = Number(url.searchParams.get("limit"));
         const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 500) : 100;
 

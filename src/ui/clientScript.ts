@@ -4,7 +4,7 @@ export function renderClientScript(): string {
   console.log("GP-V4: Clean slate active. Old UI prototype removed.");
   (function() {
     let activeTab = 'dashboard';
-    let currentTimeframe = 'M5';
+    let currentTimeframe = 'M1';
     let marketCandles = [];
     let activeSetups = [];
     let lastPrice = null;
@@ -89,7 +89,7 @@ export function renderClientScript(): string {
 
     window.selectTimeframe = function(tf) {
       currentTimeframe = tf;
-      ['M5', 'M15', 'H1'].forEach(t => {
+      ['M1', 'M5', 'M15', 'H1'].forEach(t => {
         const btn = document.getElementById('tf-' + t);
         if (btn) {
           if (t === tf) {

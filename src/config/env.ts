@@ -50,14 +50,14 @@ export class EnvConfigSource implements ConfigSource {
     return {
       mode: env("GP_MODE") || "ANALYSIS_ONLY",
       symbols: symbolList,
-      timeframes: list(process.env.GP_TIMEFRAMES, ["M5", "M15", "H1"]).map((t) => t.toUpperCase()),
+      timeframes: list(process.env.GP_TIMEFRAMES, ["M1", "M5", "M15", "H1"]).map((t) => t.toUpperCase()),
       scanIntervalMs: num(process.env.GP_SCAN_INTERVAL_MS, 60_000),
       biquiti: {
-        baseUrl: env("BIQUITI_BASE_URL"),
+        baseUrl: env("BIQUITI_BASE_URL") || "https://biquote.io",
         apiKey: env("BIQUITI_API_KEY"),
-        candlesPath: env("BIQUITI_CANDLES_PATH") || "/v1/candles",
+        candlesPath: env("BIQUITI_CANDLES_PATH") || "/api/{symbol}/ohlc",
         authHeader: env("BIQUITI_AUTH_HEADER") || "Authorization",
-        symbolMap,
+        symbolMap: { XAUUSD: "XAUUSD", ...symbolMap },
         timeoutMs: num(process.env.BIQUITI_TIMEOUT_MS, 10_000),
       },
       ai: {

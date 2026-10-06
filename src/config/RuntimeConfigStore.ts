@@ -23,7 +23,7 @@ export interface ConfigPersistenceProvider {
 export const DEFAULT_RUNTIME_CONFIG: AppConfig = {
   mode: "ANALYSIS_ONLY",
   symbols: ["XAUUSD"],
-  timeframes: ["M5", "M15", "H1"],
+  timeframes: ["M1", "M5", "M15", "H1"],
   scanIntervalMs: 60_000,
   strategyExpiryBars: 6,
   fixturesDir: "./fixtures",
@@ -303,7 +303,7 @@ export class RuntimeConfigStore {
         candlesPath: this.config.biquiti.candlesPath,
         authHeader: this.config.biquiti.authHeader,
         timeoutMs: this.config.biquiti.timeoutMs,
-        isConfigured: Boolean(this.config.biquiti.baseUrl && this.config.biquiti.apiKey),
+        isConfigured: Boolean(this.config.biquiti.baseUrl),
       },
       supabase: {
         isConfigured: Boolean(this.config.supabase.url && this.config.supabase.serviceKey),
