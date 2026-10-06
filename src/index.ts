@@ -101,6 +101,7 @@ export async function dispatchRuntime(
         positionManager: app.positionManager,
         protection: app.protection,
         reconciliation: app.reconciliation,
+        experienceMemory: app.experienceMemory,
         idempotency: app.idempotency,
         log,
       });
@@ -252,7 +253,15 @@ async function main(): Promise<void> {
 
 export { main, TradingPipeline };
 
-if (!process.env.VITEST) {
+const scriptPath = process.argv[1];
+const isMainEntryPoint =
+  Boolean((import.meta as any).main) ||
+  (Boolean(scriptPath) &&
+    !process.env.VITEST &&
+    process.env.NODE_ENV !== "test" &&
+    Boolean(scriptPath?.endsWith("index.ts") || scriptPath?.endsWith("index.js")));
+
+if (isMainEntryPoint) {
   main().catch((err) => {
     // eslint-disable-next-line no-console
     console.error(err);

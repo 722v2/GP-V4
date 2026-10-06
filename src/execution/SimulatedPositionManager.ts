@@ -15,12 +15,16 @@ import {
 } from "./TradeLifecycle.js";
 import type { SimulatedFill } from "../pipeline/TradingPipeline.js";
 
+import type { ExperienceMemory, TradeExperienceRecord } from "../core/memory/ExperienceMemory.js";
+import { calculateR } from "../core/types/Trade.js";
+
 export interface SimulatedPositionManagerDeps {
   readonly bus: EventBus;
   readonly repo: PersistenceRepository;
   readonly protection?: BrokerProtection;
   readonly spreadModel?: SpreadSlippageModel;
   readonly cache?: CandleCache;
+  readonly experienceMemory?: ExperienceMemory;
   readonly log?: Logger;
   readonly now?: () => number;
 }
@@ -47,6 +51,7 @@ export class SimulatedPositionManager {
   private readonly protection?: BrokerProtection;
   private readonly spreadModel?: SpreadSlippageModel;
   private readonly cache?: CandleCache;
+  private readonly experienceMemory?: ExperienceMemory;
   private readonly log?: Logger;
   private readonly now: () => number;
 
@@ -56,6 +61,7 @@ export class SimulatedPositionManager {
     this.protection = deps.protection;
     this.spreadModel = deps.spreadModel;
     this.cache = deps.cache;
+    this.experienceMemory = deps.experienceMemory;
     this.log = deps.log;
     this.now = deps.now ?? Date.now;
   }
@@ -253,6 +259,33 @@ export class SimulatedPositionManager {
               exitReason: updated.exitReason,
             };
             await safe(() => this.repo.updateTrade(trade), this.log, "updateTrade terminal");
+
+            const pnl = updated.realizedPnl ?? 0;
+            const outcome = pnl > 0 ? "WIN" : pnl < 0 ? "LOSS" : "EVEN";
+            const riskAmt = trade.riskAmount > 0 ? trade.riskAmount : 100;
+            const realizedR = Math.round((pnl / riskAmt) * 100) / 100;
+
+            const expRecord: TradeExperienceRecord = {
+              id: `exp_${trade.id}`,
+              setupId: trade.setupId ?? trade.id,
+              symbol: trade.symbol,
+              timeframe: trade.timeframe ?? "M5",
+              direction: trade.direction,
+              openedAt: trade.openedAt ?? trade.createdAt,
+              closedAt: trade.closedAt ?? candle.openTime,
+              factors: [],
+              confluenceScore: trade.confluenceScore ?? 0,
+              outcome,
+              realizedR,
+              realizedPnl: pnl,
+            };
+
+            if (this.experienceMemory) {
+              this.experienceMemory.record(expRecord);
+            }
+            if (this.repo.saveExperienceRecord) {
+              await safe(() => this.repo.saveExperienceRecord!(expRecord), this.log, "saveExperienceRecord");
+            }
           }
 
           this.positions.delete(id);

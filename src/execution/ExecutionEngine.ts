@@ -5,7 +5,7 @@ import type { InstrumentSpec } from "../risk/InstrumentSpec.js";
 import { DEFAULT_XAUUSD_SPEC, validateInstrumentSpec } from "../risk/InstrumentSpec.js";
 import type { BrokerAdapter, OrderExecutionResult, OrderSubmissionRequest, ProtectionStatus } from "./broker/BrokerAdapter.js";
 import type { EventBus } from "../core/events/EventBus.js";
-import type { PersistenceRepository } from "../persistence/Persistence.js";
+import type { PersistenceRepository, OrderRecord, ExecutionRecord } from "../persistence/Persistence.js";
 import type { Logger } from "../core/logging/Logger.js";
 
 export interface ExecutionEngineDeps {
@@ -42,8 +42,28 @@ export class ExecutionEngine {
     const timestamp = this.now();
     const clientOrderId = `CL-ORD-${plan.id}`;
 
-    // 1. Check Execution Idempotency
-    const existing = this.executedClientOrders.get(clientOrderId);
+    // 1. Check Execution Idempotency (In-Memory + Durable DB)
+    let existing = this.executedClientOrders.get(clientOrderId);
+    if (!existing && this.repo.getOrder) {
+      const savedOrder = await this.repo.getOrder(clientOrderId).catch(() => null);
+      if (savedOrder) {
+        existing = {
+          success: savedOrder.status === "ORDER_FILLED" || savedOrder.status === "ORDER_SUBMITTED",
+          orderId: savedOrder.id,
+          clientOrderId: savedOrder.clientOrderId,
+          tradeId: savedOrder.tradeId,
+          status: savedOrder.status,
+          filledLot: savedOrder.filledLot,
+          fillPrice: savedOrder.fillPrice ?? 0,
+          slippagePoints: 0,
+          commission: 0,
+          timestamp: savedOrder.submittedAt,
+          rejectionReason: savedOrder.rejectionReason ?? undefined,
+          protectionStatus: "UNKNOWN",
+        };
+        this.executedClientOrders.set(clientOrderId, existing);
+      }
+    }
     if (existing) {
       this.log?.info("idempotent order execution skipped duplicate submission", {
         tradeId: plan.id,
@@ -174,6 +194,52 @@ export class ExecutionEngine {
 
     // Cache execution result for idempotency
     this.executedClientOrders.set(clientOrderId, executionResult);
+
+    // Persist Order Record
+    if (this.repo.saveOrder) {
+      const orderRecord: OrderRecord = {
+        id: executionResult.orderId ?? clientOrderId,
+        clientOrderId,
+        tradeId: plan.id,
+        symbol: plan.symbol,
+        side: plan.direction,
+        orderType: "MARKET",
+        requestedLot: plan.lotSize,
+        filledLot: executionResult.filledLot,
+        requestedPrice: plan.entry,
+        fillPrice: executionResult.fillPrice,
+        stopLoss: plan.stopLoss,
+        takeProfit: plan.takeProfit1,
+        status: executionResult.status,
+        rejectionReason: executionResult.rejectionReason ?? null,
+        submittedAt: timestamp,
+        filledAt: executionResult.status === "ORDER_FILLED" ? timestamp : null,
+      };
+      await this.repo.saveOrder(orderRecord).catch((err) => {
+        this.log?.warn("failed to persist order record", { clientOrderId, err: err?.message ?? String(err) });
+      });
+    }
+
+    // Persist Execution Record if filled
+    if (executionResult.success && executionResult.status === "ORDER_FILLED" && this.repo.saveExecution) {
+      const executionRecord: ExecutionRecord = {
+        id: `exec_${clientOrderId}`,
+        orderId: executionResult.orderId ?? clientOrderId,
+        clientOrderId,
+        tradeId: plan.id,
+        symbol: plan.symbol,
+        side: plan.direction,
+        filledLot: executionResult.filledLot,
+        fillPrice: executionResult.fillPrice,
+        slippagePoints: executionResult.slippagePoints,
+        commission: executionResult.commission,
+        protectionStatus: executionResult.protectionStatus,
+        executedAt: timestamp,
+      };
+      await this.repo.saveExecution(executionRecord).catch((err) => {
+        this.log?.warn("failed to persist execution record", { clientOrderId, err: err?.message ?? String(err) });
+      });
+    }
 
     // 7. Publish Events & Update Persistence if Filled
     if (executionResult.success && executionResult.status === "ORDER_FILLED") {

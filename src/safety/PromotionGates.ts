@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config/AppConfig.js";
-import type { PersistenceRepository } from "../persistence/Persistence.js";
+import type { PersistenceRepository, PromotionReportRecord } from "../persistence/Persistence.js";
 import type { KillSwitch } from "../risk/KillSwitch.js";
 import type { BrokerAdapter } from "../execution/broker/BrokerAdapter.js";
 
@@ -290,7 +290,7 @@ export class PromotionGateEngine {
       ? "جميع بوابات الترقية مجتازة بنجاح. النظام مؤهل للتداول الآلي."
       : `الوضع الحالي: ${overallState}. التداول الآلي محظور بأمان (AUTO_TRADING = BLOCKED).`;
 
-    return {
+    const report: PromotionStateReport = {
       overallState,
       autoTradingAllowed: allMandatoryPassed,
       activeMode: this.config.mode,
@@ -298,5 +298,20 @@ export class PromotionGateEngine {
       gates,
       summary,
     };
+
+    if (this.repo.savePromotionReport) {
+      const record: PromotionReportRecord = {
+        id: `promo_${timestamp}`,
+        overallState: report.overallState,
+        autoTradingAllowed: report.autoTradingAllowed,
+        activeMode: report.activeMode,
+        gates: report.gates,
+        summary: report.summary,
+        evaluatedAt: report.evaluatedAt,
+      };
+      await this.repo.savePromotionReport(record).catch(() => {});
+    }
+
+    return report;
   }
 }

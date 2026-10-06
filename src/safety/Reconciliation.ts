@@ -79,6 +79,9 @@ export function planToTrade(plan: TradePlan, state: Trade["state"] = "OPEN"): Tr
   return { ...plan, state, openedAt: plan.createdAt };
 }
 
+import type { ExperienceMemory } from "../core/memory/ExperienceMemory.js";
+import { randomUUID } from "node:crypto";
+
 export interface StartupReconciliationParams {
   readonly repo: PersistenceRepository;
   readonly killSwitch: KillSwitch;
@@ -87,6 +90,7 @@ export interface StartupReconciliationParams {
   readonly positionManager?: SimulatedPositionManager;
   readonly protection: BrokerProtection;
   readonly reconciliation: ReconciliationService;
+  readonly experienceMemory?: ExperienceMemory;
   readonly idempotency?: IdempotencyGuard;
   readonly tolerance?: number;
   readonly log?: Logger;
@@ -124,6 +128,19 @@ export async function runStartupReconciliation(
     params.killSwitch.restore(savedKs);
     killSwitchRestored = true;
     log?.info("restored KillSwitch from persistence", { level: savedKs.level, reason: savedKs.reason });
+  }
+
+  // 1b. Restore ExperienceMemory records if provided
+  if (params.experienceMemory && params.repo.getExperienceRecords) {
+    try {
+      const records = await params.repo.getExperienceRecords(500);
+      for (const r of records) {
+        params.experienceMemory.record(r);
+      }
+      log?.info("restored experience memory records from persistence", { count: records.length });
+    } catch (err: any) {
+      log?.warn("failed to restore experience records from persistence", { err: err.message });
+    }
   }
 
   // 2. Restore open trades / active setups
@@ -178,6 +195,22 @@ export async function runStartupReconciliation(
   if (mismatches.length > 0) {
     repairsAttempted = await params.reconciliation.repair(activeTrades);
     mismatches = await params.reconciliation.reconcile(activeTrades, tolerance);
+  }
+
+  // Persist reconciliation event record
+  if (params.repo.saveReconciliationEvent) {
+    await params.repo.saveReconciliationEvent({
+      id: `recon_${now}_${randomUUID().slice(0, 8)}`,
+      mismatchesCount: mismatches.length,
+      mismatches,
+      killSwitchLevel: params.killSwitch.level,
+      repairsAttempted,
+      repairedCount: repairsAttempted,
+      success: mismatches.length === 0,
+      createdAt: now,
+    }).catch((err: any) => {
+      log?.warn("failed to persist reconciliation event", { err: err.message });
+    });
   }
 
   // If mismatches remain after safe repair, block new order origination by escalating KillSwitch to L2

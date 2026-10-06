@@ -5,8 +5,18 @@ import type { Trade, TradePlan } from "../core/types/Trade.js";
 import type { AiResult } from "../core/types/AiDecision.js";
 import type { KillSwitchState } from "../risk/KillSwitch.js";
 import { AppError, ErrorCode, type Logger } from "../core/logging/Logger.js";
-import { serializeAiDecision, type SignalRecordResult, type PersistenceRepository, type RiskDecisionRecord } from "./Persistence.js";
+import {
+  serializeAiDecision,
+  type SignalRecordResult,
+  type PersistenceRepository,
+  type RiskDecisionRecord,
+  type OrderRecord,
+  type ExecutionRecord,
+  type ReconciliationEventRecord,
+  type PromotionReportRecord,
+} from "./Persistence.js";
 import type { Signal } from "../pipeline/Signal.js";
+import type { TradeExperienceRecord } from "../core/memory/ExperienceMemory.js";
 
 export interface SupabaseConfig {
   url: string;
@@ -298,6 +308,187 @@ export class SupabaseRepository implements PersistenceRepository {
       return null;
     }
   }
+
+  async saveExperienceRecord(record: TradeExperienceRecord): Promise<void> {
+    await this.upsert(
+      "experience_records",
+      {
+        id: record.id,
+        setup_id: record.setupId,
+        symbol: record.symbol,
+        timeframe: record.timeframe,
+        direction: record.direction,
+        opened_at: record.openedAt,
+        closed_at: record.closedAt,
+        factors: record.factors,
+        confluence_score: record.confluenceScore,
+        outcome: record.outcome,
+        realized_r: record.realizedR,
+        realized_pnl: record.realizedPnl,
+        created_at: Date.now(),
+      },
+      "id"
+    );
+  }
+
+  async getExperienceRecords(limit = 100): Promise<TradeExperienceRecord[]> {
+    if (!this.isConfigured()) return [];
+    const safeLimit = Math.max(1, Math.min(limit, 500));
+    const { data, error } = await this.db()
+      .from("experience_records")
+      .select("*")
+      .order("closed_at", { ascending: true })
+      .limit(safeLimit);
+    if (error) {
+      this.log.warn("failed to get experience records from supabase", { err: error.message });
+      return [];
+    }
+    return (data ?? []).map(mapExperienceRow);
+  }
+
+  async saveOrder(order: OrderRecord): Promise<void> {
+    await this.upsert(
+      "orders",
+      {
+        id: order.id,
+        client_order_id: order.clientOrderId,
+        trade_id: order.tradeId,
+        symbol: order.symbol,
+        side: order.side,
+        order_type: order.orderType,
+        requested_lot: order.requestedLot,
+        filled_lot: order.filledLot,
+        requested_price: order.requestedPrice ?? null,
+        fill_price: order.fillPrice ?? null,
+        stop_loss: order.stopLoss ?? null,
+        take_profit: order.takeProfit ?? null,
+        status: order.status,
+        rejection_reason: order.rejectionReason ?? null,
+        submitted_at: order.submittedAt,
+        filled_at: order.filledAt ?? null,
+      },
+      "id"
+    );
+  }
+
+  async getOrder(clientOrderId: string): Promise<OrderRecord | null> {
+    if (!this.isConfigured()) return null;
+    const { data, error } = await this.db()
+      .from("orders")
+      .select("*")
+      .eq("client_order_id", clientOrderId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return {
+      id: String(data.id),
+      clientOrderId: String(data.client_order_id),
+      tradeId: String(data.trade_id),
+      symbol: String(data.symbol),
+      side: data.side as OrderRecord["side"],
+      orderType: data.order_type as OrderRecord["orderType"],
+      requestedLot: Number(data.requested_lot),
+      filledLot: Number(data.filled_lot),
+      requestedPrice: data.requested_price != null ? Number(data.requested_price) : undefined,
+      fillPrice: data.fill_price != null ? Number(data.fill_price) : undefined,
+      stopLoss: data.stop_loss != null ? Number(data.stop_loss) : undefined,
+      takeProfit: data.take_profit != null ? Number(data.take_profit) : undefined,
+      status: data.status as OrderRecord["status"],
+      rejectionReason: data.rejection_reason != null ? String(data.rejection_reason) : undefined,
+      submittedAt: Number(data.submitted_at),
+      filledAt: data.filled_at != null ? Number(data.filled_at) : undefined,
+    };
+  }
+
+  async saveExecution(execution: ExecutionRecord): Promise<void> {
+    await this.upsert(
+      "executions",
+      {
+        id: execution.id,
+        order_id: execution.orderId,
+        client_order_id: execution.clientOrderId,
+        trade_id: execution.tradeId,
+        symbol: execution.symbol,
+        side: execution.side,
+        filled_lot: execution.filledLot,
+        fill_price: execution.fillPrice,
+        slippage_points: execution.slippagePoints,
+        commission: execution.commission,
+        protection_status: execution.protectionStatus,
+        executed_at: execution.executedAt,
+      },
+      "id"
+    );
+  }
+
+  async saveReconciliationEvent(event: ReconciliationEventRecord): Promise<void> {
+    await this.upsert(
+      "reconciliation_events",
+      {
+        id: event.id,
+        mismatches_count: event.mismatchesCount,
+        mismatches: event.mismatches,
+        kill_switch_level: event.killSwitchLevel,
+        repairs_attempted: event.repairsAttempted,
+        repaired_count: event.repairedCount,
+        success: event.success,
+        created_at: event.createdAt,
+      },
+      "id"
+    );
+  }
+
+  async savePromotionReport(report: PromotionReportRecord): Promise<void> {
+    await this.upsert(
+      "promotion_gates",
+      {
+        id: report.id,
+        overall_state: report.overallState,
+        auto_trading_allowed: report.autoTradingAllowed,
+        active_mode: report.activeMode,
+        gates: report.gates,
+        summary: report.summary,
+        evaluated_at: report.evaluatedAt,
+      },
+      "id"
+    );
+  }
+
+  async getLatestPromotionReport(): Promise<PromotionReportRecord | null> {
+    if (!this.isConfigured()) return null;
+    const { data, error } = await this.db()
+      .from("promotion_gates")
+      .select("*")
+      .order("evaluated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    return {
+      id: String(data.id),
+      overallState: String(data.overall_state),
+      autoTradingAllowed: Boolean(data.auto_trading_allowed),
+      activeMode: String(data.active_mode),
+      gates: (data.gates as unknown[]) ?? [],
+      summary: String(data.summary),
+      evaluatedAt: Number(data.evaluated_at),
+    };
+  }
+}
+
+function mapExperienceRow(row: Record<string, unknown>): TradeExperienceRecord {
+  return {
+    id: String(row.id),
+    setupId: String(row.setup_id),
+    symbol: String(row.symbol),
+    timeframe: String(row.timeframe ?? "M5"),
+    direction: (row.direction as TradeExperienceRecord["direction"]) ?? "LONG",
+    openedAt: Number(row.opened_at),
+    closedAt: Number(row.closed_at),
+    factors: Array.isArray(row.factors) ? (row.factors as string[]) : [],
+    confluenceScore: Number(row.confluence_score ?? 0.7),
+    outcome: (row.outcome as TradeExperienceRecord["outcome"]) ?? "EVEN",
+    realizedR: Number(row.realized_r ?? 0),
+    realizedPnl: Number(row.realized_pnl ?? 0),
+  };
 }
 
 function mapTradeRow(row: Record<string, unknown>): Trade {

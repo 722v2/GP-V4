@@ -175,6 +175,7 @@ export function buildApp(
     protection,
     spreadModel,
     cache,
+    experienceMemory,
     log: log.child("position-manager"),
   });
   positionManager.attachToBus();
@@ -196,7 +197,7 @@ export function buildApp(
     accountId: mt5Config.accountId,
     server: mt5Config.server,
     brokerSymbolXauusd: mt5Config.brokerSymbolXauusd,
-  }, log.child("mt5-service"));
+  }, log.child("mt5-service"), undefined, repo);
 
   // Broker Adapter & Execution Engine Selection
   let broker: BrokerAdapter;

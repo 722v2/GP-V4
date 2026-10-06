@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Logger } from "../../core/logging/Logger.js";
 import { createConsoleLogger } from "../../core/logging/Logger.js";
+import type { PersistenceRepository } from "../../persistence/Persistence.js";
 import type {
   BrokerAccountInfo,
   BrokerHealth,
@@ -74,12 +75,15 @@ export class Mt5Service {
   private lastError: string | null = null;
   private lastCheckedAt: number = Date.now();
   private readonly configFilePath: string;
+  private readonly repo?: PersistenceRepository;
 
   constructor(
     initialConfig?: Partial<Mt5AccountConfig>,
     private readonly log: Logger = createConsoleLogger("mt5-service"),
-    customConfigPath?: string
+    customConfigPath?: string,
+    repo?: PersistenceRepository
   ) {
+    this.repo = repo;
     this.configFilePath =
       customConfigPath ||
       process.env.GP_MT5_CONFIG_PATH ||
@@ -134,6 +138,16 @@ export class Mt5Service {
         lastConnectedAt: this.lastConnectedAt,
       };
       fs.writeFileSync(this.configFilePath, JSON.stringify(data, null, 2), "utf-8");
+
+      if (this.repo?.saveSettings && this.repo?.getSettings) {
+        const repo = this.repo;
+        repo.getSettings!().then((existing) => {
+          const currentSettings = existing ?? {};
+          repo.saveSettings!({ ...currentSettings, mt5Account: data }, "mt5-service").catch((err) => {
+            this.log.warn("failed to save mt5 account to system_settings", { err: err?.message });
+          });
+        }).catch(() => {});
+      }
     } catch (err: any) {
       this.log.error("failed to save MT5 account config", err);
     }

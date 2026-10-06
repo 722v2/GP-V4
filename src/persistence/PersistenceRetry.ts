@@ -290,4 +290,60 @@ export class RetryingRepository implements PersistenceRepository {
       this.inner.getSettings!()
     );
   }
+
+  async saveExperienceRecord(record: import("../core/memory/ExperienceMemory.js").TradeExperienceRecord): Promise<void> {
+    if (!this.inner.saveExperienceRecord) return;
+    return this.executeWithRetry("saveExperienceRecord", "experience_record", record.id, () =>
+      this.inner.saveExperienceRecord!(record)
+    );
+  }
+
+  async getExperienceRecords(limit?: number): Promise<import("../core/memory/ExperienceMemory.js").TradeExperienceRecord[]> {
+    if (!this.inner.getExperienceRecords) return [];
+    return this.executeWithRetry("getExperienceRecords", "experience_record", undefined, () =>
+      this.inner.getExperienceRecords!(limit)
+    );
+  }
+
+  async saveOrder(order: import("./Persistence.js").OrderRecord): Promise<void> {
+    if (!this.inner.saveOrder) return;
+    return this.executeWithRetry("saveOrder", "order", order.clientOrderId, () =>
+      this.inner.saveOrder!(order)
+    );
+  }
+
+  async getOrder(clientOrderId: string): Promise<import("./Persistence.js").OrderRecord | null> {
+    if (!this.inner.getOrder) return null;
+    return this.executeWithRetry("getOrder", "order", clientOrderId, () =>
+      this.inner.getOrder!(clientOrderId)
+    );
+  }
+
+  async saveExecution(execution: import("./Persistence.js").ExecutionRecord): Promise<void> {
+    if (!this.inner.saveExecution) return;
+    return this.executeWithRetry("saveExecution", "execution", execution.id, () =>
+      this.inner.saveExecution!(execution)
+    );
+  }
+
+  async saveReconciliationEvent(event: import("./Persistence.js").ReconciliationEventRecord): Promise<void> {
+    if (!this.inner.saveReconciliationEvent) return;
+    return this.executeWithRetry("saveReconciliationEvent", "reconciliation_event", event.id, () =>
+      this.inner.saveReconciliationEvent!(event)
+    );
+  }
+
+  async savePromotionReport(report: import("./Persistence.js").PromotionReportRecord): Promise<void> {
+    if (!this.inner.savePromotionReport) return;
+    return this.executeWithRetry("savePromotionReport", "promotion_report", report.id, () =>
+      this.inner.savePromotionReport!(report)
+    );
+  }
+
+  async getLatestPromotionReport(): Promise<import("./Persistence.js").PromotionReportRecord | null> {
+    if (!this.inner.getLatestPromotionReport) return null;
+    return this.executeWithRetry("getLatestPromotionReport", "promotion_report", "latest", () =>
+      this.inner.getLatestPromotionReport!()
+    );
+  }
 }

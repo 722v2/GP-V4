@@ -217,10 +217,11 @@ describe("ScannerScheduler — Uncaught Error Handling & Clean Shutdown", () => 
 
   it("tolerates uncaught pass errors without dying or stopping the scheduler", async () => {
     let passAttempts = 0;
+    const silentLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, child: () => silentLog };
     const scheduler = new ScannerScheduler({
       timeframes: ["M5"],
       scanIntervalMs: 10_000,
-      log,
+      log: silentLog,
       runPass: async () => {
         passAttempts += 1;
         if (passAttempts === 1) {
@@ -230,7 +231,7 @@ describe("ScannerScheduler — Uncaught Error Handling & Clean Shutdown", () => 
     });
 
     // Start scheduler (pass 1 will throw uncaught error inside runPass)
-    await expect(scheduler.start()).resolves.not.toThrow();
+    await expect(scheduler.start()).resolves.toBeUndefined();
     expect(passAttempts).toBe(1);
 
     // Second pass manual execution runs cleanly
