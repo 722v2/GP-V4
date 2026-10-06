@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { NovitaProvider } from "../../src/ai/NovitaProvider.js";
+import { OpenAiCompatibleProvider } from "../../src/ai/OpenAiCompatibleProvider.js";
 import {
   AiRouter,
   DEFAULT_AI_ROUTER_CONFIG,
@@ -121,11 +121,11 @@ function makeRouter(
   return { router, breaker };
 }
 
-describe("L: NovitaProvider Configurability", () => {
-  const cfg = { baseUrl: "https://api.novita.ai", apiKey: "k", model: "m1", timeoutMs: 1000 };
+describe("L: OpenAiCompatibleProvider (NVIDIA NIM) Configurability", () => {
+  const cfg = { baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "k", model: "meta/llama-3.2-11b-vision-instruct", timeoutMs: 1000 };
 
   it("is not configured without credentials", async () => {
-    const p = new NovitaProvider({ ...cfg, apiKey: "" }, createConsoleLogger("test"));
+    const p = new OpenAiCompatibleProvider({ ...cfg, apiKey: "" }, createConsoleLogger("test"));
     expect(p.isConfigured()).toBe(false);
     await expect(p.complete({ model: "", messages: [{ role: "user", content: "x" }] })).rejects.toThrow(/not configured/);
   });
@@ -144,7 +144,7 @@ describe("L: NovitaProvider Configurability", () => {
       );
     }) as typeof fetch;
 
-    const p = new NovitaProvider(cfg, createConsoleLogger("test"), fetchImpl);
+    const p = new OpenAiCompatibleProvider(cfg, createConsoleLogger("test"), fetchImpl);
     const out = await p.complete({ model: "fast-m5-model", messages: [{ role: "user", content: "x" }] });
     expect(capturedBody.model).toBe("fast-m5-model");
     expect(out.content).toBe("hello");
@@ -152,11 +152,11 @@ describe("L: NovitaProvider Configurability", () => {
 
   it("surfaces HTTP errors and schema violations as typed errors", async () => {
     const http500 = (async () => new Response("err", { status: 500 })) as typeof fetch;
-    const p1 = new NovitaProvider(cfg, createConsoleLogger("test"), http500);
+    const p1 = new OpenAiCompatibleProvider(cfg, createConsoleLogger("test"), http500);
     await expect(p1.complete({ model: "", messages: [{ role: "user", content: "x" }] })).rejects.toThrow(/HTTP 500/);
 
     const badBody = (async () => new Response(JSON.stringify({ nope: 1 }), { status: 200 })) as typeof fetch;
-    const p2 = new NovitaProvider(cfg, createConsoleLogger("test"), badBody);
+    const p2 = new OpenAiCompatibleProvider(cfg, createConsoleLogger("test"), badBody);
     await expect(p2.complete({ model: "", messages: [{ role: "user", content: "x" }] })).rejects.toThrow(/expected schema/);
   });
 });

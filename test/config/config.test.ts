@@ -15,7 +15,7 @@ const validBase = {
     timeoutMs: 10_000,
   },
   ai: {
-    provider: "novita",
+    provider: "nvidia-nim",
     baseUrl: "",
     apiKey: "",
     model: "",

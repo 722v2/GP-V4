@@ -236,11 +236,14 @@ export class PromotionGateEngine {
 
     // GATE 6: PRODUCTION_SAFETY
     const hasSupabaseUrl = Boolean(this.config.supabase.url && this.config.supabase.serviceKey);
-    const hasNovitaKey = Boolean(this.config.ai.apiKey);
+    const hasAiKey = Boolean(this.config.ai.apiKey);
     const hasBiquitiKey = Boolean(this.config.biquiti.apiKey);
-    const hasTelegram = Boolean(this.config.telegram.botToken && this.config.telegram.chatId);
+    const hasTelegram = Boolean(
+      this.config.telegram.botToken &&
+      (this.config.telegram.chatId || this.config.telegram.discoveryStatus?.status === "VERIFIED")
+    );
 
-    const isProdSafetyMet = hasSupabaseUrl && hasNovitaKey && hasBiquitiKey && hasTelegram;
+    const isProdSafetyMet = hasSupabaseUrl && hasAiKey && hasBiquitiKey && hasTelegram;
     gates.push({
       gateId: "GATE_6_PRODUCTION_SAFETY",
       name: "سلامة البيئة والخدمات الخارجية الإنتاجية (Production Safety & Infrastructure)",
@@ -248,7 +251,7 @@ export class PromotionGateEngine {
       reason: isProdSafetyMet
         ? "جميع المفاتيح والخدمات السحابية مهيأة ومتحقق منها"
         : "توجد خدمات سحابية خارجية غير مهيأة أو غير متصلة بالبيئة الإنتاجية",
-      evidence: `Supabase=${hasSupabaseUrl ? "SET" : "MISSING"}, Novita=${hasNovitaKey ? "SET" : "MISSING"}, Biquiti=${hasBiquitiKey ? "SET" : "MISSING"}, Telegram=${hasTelegram ? "SET" : "MISSING"}`,
+      evidence: `Supabase=${hasSupabaseUrl ? "SET" : "MISSING"}, AI=${hasAiKey ? "SET" : "MISSING"}, Biquiti=${hasBiquitiKey ? "SET" : "MISSING"}, Telegram=${hasTelegram ? "SET" : "MISSING"}`,
       requiredNextAction: "توفير متغيرات البيئة الإنتاجية واعتماد ترحيلات Supabase السحابية",
       timestamp,
     });

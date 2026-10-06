@@ -225,6 +225,12 @@ async function main(): Promise<void> {
       if (saved.ai && typeof (saved.ai as any).minConfidence === "number") {
         cfg.ai.minConfidence = (saved.ai as any).minConfidence;
       }
+      if (saved.telegram && typeof saved.telegram === "object") {
+        Object.assign(cfg.telegram, saved.telegram);
+        if (app.telegram && typeof app.telegram.updateConfig === "function") {
+          app.telegram.updateConfig(cfg.telegram);
+        }
+      }
     }
   } catch (err: any) {
     log.warn(`failed to restore saved settings on startup, using default env values: ${err.message}`);

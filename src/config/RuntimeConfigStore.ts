@@ -54,10 +54,10 @@ export const DEFAULT_RUNTIME_CONFIG: AppConfig = {
   },
 
   ai: {
-    provider: "novita",
-    baseUrl: "https://api.novita.ai/v3/openai",
+    provider: "nvidia-nim",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
     apiKey: "", // Secret - remains empty in zero-config
-    model: "deepseek/deepseek-r1",
+    model: "meta/llama-3.2-11b-vision-instruct",
     m5Model: "",
     timeoutMs: 45_000,
     m5TimeoutMs: 15_000,
@@ -436,6 +436,11 @@ export class RuntimeConfigStore {
     // 6. Repository settings sync if available
     if (app.repo && typeof app.repo.saveSettings === "function") {
       app.repo.saveSettings(cfg, "runtime-store").catch(() => {});
+    }
+
+    // 7. Telegram dynamic settings sync
+    if (app.telegram && typeof app.telegram.updateConfig === "function") {
+      app.telegram.updateConfig(cfg.telegram);
     }
   }
 }

@@ -13,7 +13,7 @@ import { ConfluenceEngine } from "../strategies/ConfluenceEngine.js";
 import { StrongCandleStrategy } from "../strategies/StrongCandleStrategy.js";
 import { SetupStore } from "../strategies/SetupStore.js";
 import { ExperienceMemory } from "../core/memory/ExperienceMemory.js";
-import { NovitaProvider } from "../ai/NovitaProvider.js";
+import { OpenAiCompatibleProvider } from "../ai/OpenAiCompatibleProvider.js";
 import { AiRouter, DEFAULT_AI_ROUTER_CONFIG } from "../ai/AiRouter.js";
 import { BudgetGuard } from "../ai/BudgetGuard.js";
 import { CircuitBreaker } from "../ai/CircuitBreaker.js";
@@ -22,6 +22,7 @@ import { SupabaseRepository } from "../persistence/SupabaseRepository.js";
 import { NullRepository, InMemoryRepository, type PersistenceRepository } from "../persistence/Persistence.js";
 import { RetryingRepository } from "../persistence/PersistenceRetry.js";
 import { TelegramNotifier } from "../telegram/TelegramNotifier.js";
+import { TelegramDiscoveryService } from "../telegram/TelegramDiscoveryService.js";
 import { Scanner } from "../scanner/Scanner.js";
 import { TradingPipeline } from "./TradingPipeline.js";
 import { IdempotencyGuard } from "../safety/IdempotencyGuard.js";
@@ -73,6 +74,7 @@ export interface AppRuntime {
   configStore?: RuntimeConfigStore;
   experienceMemory?: ExperienceMemory;
   mt5Service?: Mt5Service;
+  telegramDiscoveryService?: TelegramDiscoveryService;
 }
 
 /** Wires every module into a runnable graph. External credentials come from config. */
@@ -102,12 +104,12 @@ export function buildApp(
   const setupStore = new SetupStore();
   const experienceMemory = new ExperienceMemory();
 
-  const novita = new NovitaProvider(
+  const aiProvider = new OpenAiCompatibleProvider(
     { baseUrl: cfg.ai.baseUrl, apiKey: cfg.ai.apiKey, model: cfg.ai.model, timeoutMs: cfg.ai.timeoutMs },
-    log.child("novita")
+    log.child("ai-provider")
   );
   const ai = new AiRouter(
-    novita,
+    aiProvider,
     new BudgetGuard({ hourlyBudgetUsd: cfg.ai.hourlyBudgetUsd, dailyBudgetUsd: cfg.ai.dailyBudgetUsd }),
     new CircuitBreaker(),
     new ContextBuilder(),
@@ -278,6 +280,9 @@ export function buildApp(
   const scannerActivityStore = new ScannerActivityStore(repo);
   scannerActivityStore.load().catch(() => {});
 
+  const configStore = providedConfigStore ?? new RuntimeConfigStore(cfg);
+  const telegramDiscoveryService = new TelegramDiscoveryService(configStore, telegram, log.child("telegram-discovery"));
+
   return {
     bus,
     cache,
@@ -302,7 +307,8 @@ export function buildApp(
     scannerActivityStore,
     experienceMemory,
     mt5Service,
-    configStore: providedConfigStore ?? new RuntimeConfigStore(cfg),
+    configStore,
+    telegramDiscoveryService,
   };
 }
 

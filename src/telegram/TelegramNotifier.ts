@@ -12,11 +12,19 @@ export interface TelegramConfig {
  * notification failure.
  */
 export class TelegramNotifier {
+  private cfg: TelegramConfig;
+
   constructor(
-    private readonly cfg: TelegramConfig,
+    cfg: TelegramConfig,
     private readonly log: Logger,
     private readonly fetchImpl: typeof fetch = fetch
-  ) {}
+  ) {
+    this.cfg = cfg;
+  }
+
+  updateConfig(newCfg: TelegramConfig): void {
+    this.cfg = newCfg;
+  }
 
   get isOn(): boolean {
     return this.cfg.enabled && this.cfg.botToken !== "" && this.cfg.chatId !== "";

@@ -282,7 +282,7 @@ export function renderSettingsView(): string {
         </div>
 
         <p class="text-slate-400 text-[11px]">
-          ملاحظة أمنية: مفتاح Novita API Key يعتبر سراً محفوظاً بالبيئة ولا يُعرض بالواجهة. الإعدادات التشغيلية أدناه قابلة للتعديل والتحكم.
+          ملاحظة أمنية: مفتاح AI API Key (NVIDIA NIM) يعتبر سراً محفوظاً بالبيئة ولا يُعرض بالواجهة. الإعدادات التشغيلية أدناه قابلة للتعديل والتحكم.
         </p>
 
         <form id="formAiSettings" onsubmit="event.preventDefault(); saveAiSettings();" class="space-y-3 bg-[#070A10] p-3 rounded-lg border border-slate-850">
@@ -451,6 +451,28 @@ export function renderSettingsView(): string {
             </button>
           </div>
         </form>
+
+        <!-- Auto-Discovery Panel -->
+        <div class="bg-[#070A10] p-3 rounded-lg border border-slate-850 space-y-2 mt-3 text-[11px] font-mono">
+          <div class="flex items-center justify-between border-b border-slate-850 pb-1.5">
+            <span class="font-bold text-slate-300">الربط التلقائي الآمن (Secure Auto-Discovery)</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded text-slate-200 font-bold bg-slate-800" id="lblTgDiscoveryStatus">--</span>
+          </div>
+          
+          <div class="grid grid-cols-2 gap-2 text-slate-400 text-[10px]">
+            <div>معرف المحادثة المكتشف: <span id="lblTgDiscoveredId" class="text-white font-bold">--</span></div>
+            <div>نوع الكشف: <span id="lblTgDiscoveryType" class="text-white font-bold">--</span></div>
+            <div>حالة التحقق: <span id="lblTgVerificationStatus" class="text-white font-bold">--</span></div>
+            <div>رمز المطالبة: <span id="lblTgClaimCode" class="text-amber-400 font-bold">--</span></div>
+          </div>
+
+          <div class="pt-2 flex items-center justify-between gap-2 border-t border-slate-850">
+            <span class="text-[9px] text-slate-500 max-w-[70%] leading-normal">أنشئ رمز المطالبة، ثم أرسله كرسالة خاصة إلى البوت لإثبات ملكية المحادثة فورياً.</span>
+            <button onclick="requestTelegramClaimCode()" type="button" class="px-2.5 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-black font-bold text-[10px] transition">
+              توليد رمز المطالبة
+            </button>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -505,9 +527,9 @@ export function renderSettingsView(): string {
           <p class="text-[10px] text-slate-500 leading-relaxed">المزود غير مُهيأ في بيئة التطوير الحالية، ويتم الاعتماد على الشموع الاختبارية المعتمدة.</p>
         </div>
         <div class="bg-[#070A10] p-3 rounded border border-slate-850 space-y-1">
-          <span class="text-slate-500 text-[10px] block">ذكاء اصطناعي Novita</span>
+          <span class="text-slate-500 text-[10px] block">الذكاء الاصطناعي (NVIDIA NIM)</span>
           <span class="text-rose-400 font-bold block" id="setNovitaState">NOT CONNECTED</span>
-          <p class="text-[10px] text-slate-500 leading-relaxed">خدمة Novita غير متصلة. الذكاء الاصطناعي نظام استشاري فني غير حاكم.</p>
+          <p class="text-[10px] text-slate-500 leading-relaxed">خدمة الذكاء الاصطناعي غير متصلة. الذكاء الاصطناعي نظام استشاري فني غير حاكم.</p>
         </div>
         <div class="bg-[#070A10] p-3 rounded border border-slate-850 space-y-1">
           <span class="text-slate-500 text-[10px] block">وسيط MT5 والتنفيذ</span>

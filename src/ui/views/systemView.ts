@@ -89,7 +89,7 @@ export function renderSystemView(): string {
         <div class="space-y-1.5 text-slate-400 text-[11px]">
           <div class="flex justify-between"><span>الدور:</span><span class="text-purple-300">استشاري غير حاكم</span></div>
           <div class="flex justify-between"><span>قاطع الدائرة (Breaker):</span><span class="text-emerald-400" id="sysAiBreaker">CLOSED (طبيعي)</span></div>
-          <div class="flex justify-between"><span>المزود:</span><span class="text-slate-200">Novita AI / DeepSeek</span></div>
+          <div class="flex justify-between"><span>المزود:</span><span class="text-slate-200">NVIDIA NIM / DeepSeek V4.1 Flash</span></div>
         </div>
       </div>
 

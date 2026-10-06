@@ -20,7 +20,7 @@ export const AppConfigSchema = z.object({
   }),
 
   ai: z.object({
-    provider: z.string().default("novita"),
+    provider: z.string().default("nvidia-nim"),
     baseUrl: z.string().url().or(z.literal("")),
     apiKey: z.string(),
     model: z.string(),
@@ -46,6 +46,13 @@ export const AppConfigSchema = z.object({
     botToken: z.string(),
     chatId: z.string(),
     enabled: z.boolean(),
+    discoveryStatus: z.object({
+      status: z.enum(["UNCONFIGURED", "PENDING", "VERIFIED"]),
+      chatId: z.string().optional(),
+      verifiedAt: z.number().optional(),
+      claimCode: z.string().optional(),
+      claimExpiresAt: z.number().optional(),
+    }).optional(),
   }),
 
   risk: z.object({

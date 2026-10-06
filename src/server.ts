@@ -1092,19 +1092,43 @@ export function startWebServer(opts: ServerOptions): http.Server {
         return;
       }
 
-      // 18. API Telegram Endpoints (GET /api/telegram, POST /api/telegram/test)
+      // 18. API Telegram Endpoints (GET /api/telegram, POST /api/telegram/test, POST /api/telegram/claim-code)
       if (url.pathname === "/api/telegram" && method === "GET") {
         if (!app) {
           sendError(res, 503, "RUNTIME_UNAVAILABLE", "Application runtime graph is not available", requestId);
           return;
         }
+        const discovery = app.telegramDiscoveryService ? app.telegramDiscoveryService.getStatus() : { status: "UNCONFIGURED" };
         sendSuccess(res, {
           enabled: config.features.telegramEnabled,
           configured: app.telegram.isOn,
           chatIdConfigured: Boolean(config.telegram.chatId),
           status: config.features.telegramEnabled ? (app.telegram.isOn ? "READY" : "NOT_CONFIGURED") : "DISABLED",
+          discovery,
           timestamp: Date.now(),
         });
+        return;
+      }
+
+      if (url.pathname === "/api/telegram/claim-code" && method === "POST") {
+        if (!app) {
+          sendError(res, 503, "RUNTIME_UNAVAILABLE", "Application runtime graph is not available", requestId);
+          return;
+        }
+        if (!app.telegramDiscoveryService) {
+          sendError(res, 503, "DISCOVERY_UNAVAILABLE", "Telegram Discovery Service is not available", requestId);
+          return;
+        }
+        try {
+          const status = await app.telegramDiscoveryService.generateClaimCode();
+          sendSuccess(res, {
+            success: true,
+            discovery: status,
+            timestamp: Date.now(),
+          });
+        } catch (err: any) {
+          sendError(res, 400, "CLAIM_CODE_FAILED", err.message, requestId);
+        }
         return;
       }
 

@@ -205,7 +205,7 @@ describe("GP-V4 Phase 1 — Zero-Config & Runtime Configuration Architecture", (
   it("15. Settings API sanitization strictly NEVER exposes secrets", () => {
     const cfg = JSON.parse(JSON.stringify(DEFAULT_RUNTIME_CONFIG));
     cfg.biquiti.apiKey = "SECRET_BIQUITI_KEY";
-    cfg.ai.apiKey = "SECRET_NOVITA_KEY";
+    cfg.ai.apiKey = "SECRET_AI_KEY";
     cfg.supabase.serviceKey = "SECRET_SUPABASE_KEY";
     cfg.telegram.botToken = "SECRET_TELEGRAM_TOKEN";
 

@@ -53,7 +53,7 @@ export function renderTopBar(cfg: AppConfig): string {
       <div class="hidden 2xl:flex items-center gap-1.5 text-[10px] text-slate-400 bg-[#070A10] px-2 py-1 rounded border border-slate-850">
         <span>BIQUITI: <strong id="topBiquitiStatus" class="text-slate-500">NOT CONNECTED</strong></span>
         <span class="text-slate-700">&bull;</span>
-        <span>NOVITA: <strong id="topNovitaStatus" class="text-slate-500">NOT CONNECTED</strong></span>
+        <span>AI: <strong id="topNovitaStatus" class="text-slate-500">NOT CONNECTED</strong></span>
         <span class="text-slate-700">&bull;</span>
         <span>SUPABASE: <strong id="topSupabaseStatus" class="text-slate-500">IN-MEMORY</strong></span>
         <span class="text-slate-700">&bull;</span>

@@ -17,7 +17,7 @@ function baseCfg(over: Partial<AppConfig> = {}): AppConfig {
     timeframes: ["M5"],
     scanIntervalMs: 60_000,
     biquiti: { baseUrl: "", apiKey: "", candlesPath: "", authHeader: "Authorization", symbolMap: {}, timeoutMs: 10_000 },
-    ai: { provider: "novita", baseUrl: "", apiKey: "", model: "", m5Model: "", timeoutMs: 45_000, m5TimeoutMs: 15_000, maxRetries: 1, retryInitialDelayMs: 500, retryMaxDelayMs: 4000, minConfidence: 0.6, levelTolerancePts: 1.0, hourlyBudgetUsd: 1, dailyBudgetUsd: 10, cacheTtlMs: 120_000 },
+    ai: { provider: "nvidia-nim", baseUrl: "", apiKey: "", model: "", m5Model: "", timeoutMs: 45_000, m5TimeoutMs: 15_000, maxRetries: 1, retryInitialDelayMs: 500, retryMaxDelayMs: 4000, minConfidence: 0.6, levelTolerancePts: 1.0, hourlyBudgetUsd: 1, dailyBudgetUsd: 10, cacheTtlMs: 120_000 },
     supabase: { url: "", serviceKey: "" },
     telegram: { botToken: "", chatId: "", enabled: false },
     risk: {

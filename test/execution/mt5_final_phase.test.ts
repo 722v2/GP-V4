@@ -447,7 +447,7 @@ describe("GP-V4 — Final Phase: MT5 Real Account & Unified Execution Suite", ()
         ok: false,
         failure: {
           kind: "CIRCUIT_OPEN",
-          message: "Novita AI service temporarily unavailable",
+          message: "AI service temporarily unavailable",
         },
       }),
     };

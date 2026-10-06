@@ -940,8 +940,62 @@ export function renderClientScript(): string {
           badgeEl.textContent = data.status === 'READY' ? 'ON' : 'OFF';
           badgeEl.className = data.status === 'READY' ? 'text-[9px] px-1 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800' : 'text-[9px] px-1 py-0.2 rounded bg-slate-900 text-slate-500';
         }
+
+        // Update Auto-Discovery Panel fields
+        const discStatusEl = document.getElementById('lblTgDiscoveryStatus');
+        const discIdEl = document.getElementById('lblTgDiscoveredId');
+        const discTypeEl = document.getElementById('lblTgDiscoveryType');
+        const discVerEl = document.getElementById('lblTgVerificationStatus');
+        const discCodeEl = document.getElementById('lblTgClaimCode');
+
+        if (data.discovery) {
+          const disc = data.discovery;
+          if (discStatusEl) {
+            discStatusEl.textContent = disc.status;
+            if (disc.status === 'VERIFIED') {
+              discStatusEl.className = 'text-[10px] px-1.5 py-0.5 rounded text-emerald-400 font-bold bg-emerald-950/80 border border-emerald-800';
+            } else if (disc.status === 'PENDING') {
+              discStatusEl.className = 'text-[10px] px-1.5 py-0.5 rounded text-amber-400 font-bold bg-amber-950/80 border border-amber-800 animate-pulse';
+            } else {
+              discStatusEl.className = 'text-[10px] px-1.5 py-0.5 rounded text-slate-400 bg-slate-800';
+            }
+          }
+          if (discIdEl) {
+            discIdEl.textContent = disc.verifiedChatId || (disc.status === 'PENDING' ? 'AWAITING CLAIM...' : '--');
+          }
+          if (discTypeEl) {
+            discTypeEl.textContent = disc.status === 'VERIFIED' ? 'Private' : (disc.status === 'PENDING' ? 'Polling getUpdates' : '--');
+          }
+          if (discVerEl) {
+            discVerEl.textContent = disc.status === 'VERIFIED' ? 'Verified' : (disc.status === 'PENDING' ? 'Pending Claim' : '--');
+            discVerEl.className = disc.status === 'VERIFIED' ? 'text-emerald-400 font-bold' : (disc.status === 'PENDING' ? 'text-amber-400 font-bold animate-pulse' : 'text-slate-400 font-bold');
+          }
+          if (discCodeEl) {
+            if (disc.claimCode) {
+              const secLeft = Math.max(0, Math.round((disc.claimExpiresAt - Date.now()) / 1000));
+              discCodeEl.textContent = disc.claimCode + " (" + secLeft + "s left)";
+            } else {
+              discCodeEl.textContent = '--';
+            }
+          }
+        }
       } catch (err) {
         console.warn('refreshTelegram error:', err);
+      }
+    };
+
+    window.requestTelegramClaimCode = async function() {
+      try {
+        const res = await fetch('/api/telegram/claim-code', { method: 'POST' });
+        if (res.ok) {
+          showSettingsNotice(true, 'تم إنشاء رمز المطالبة وتفعيل الربط التلقائي. يرجى إرسال الرمز للبوت في تيليجرام.');
+          refreshTelegram();
+        } else {
+          const err = await res.json();
+          showSettingsNotice(false, 'فشل إنشاء الرمز: ' + (err.message || 'خطأ غير معروف'));
+        }
+      } catch (err) {
+        showSettingsNotice(false, 'فشل الربط بالشبكة: ' + String(err));
       }
     };
 

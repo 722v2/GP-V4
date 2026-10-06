@@ -15,10 +15,10 @@ describe("Promotion Gate Engine & Safety Suite", () => {
       scanIntervalMs: 60000,
       biquiti: { baseUrl: "", apiKey: "", candlesPath: "/v1/candles", authHeader: "Authorization", symbolMap: {}, timeoutMs: 10000 },
       ai: {
-        provider: "novita",
-        baseUrl: "https://api.novita.ai/v3/openai",
+        provider: "nvidia-nim",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
         apiKey: "",
-        model: "deepseek/deepseek-r1",
+        model: "meta/llama-3.2-11b-vision-instruct",
         m5Model: "",
         timeoutMs: 45000,
         m5TimeoutMs: 15000,

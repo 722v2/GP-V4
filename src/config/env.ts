@@ -61,11 +61,11 @@ export class EnvConfigSource implements ConfigSource {
         timeoutMs: num(process.env.BIQUITI_TIMEOUT_MS, 10_000),
       },
       ai: {
-        provider: env("AI_PROVIDER") || "novita",
-        baseUrl: env("AI_BASE_URL") || env("NOVITA_BASE_URL") || "https://api.novita.ai/v3/openai",
-        apiKey: env("AI_API_KEY") || env("NOVITA_API_KEY"),
-        model: env("AI_MODEL") || env("NOVITA_MODEL") || "deepseek/deepseek-r1",
-        m5Model: env("AI_M5_MODEL") || env("NOVITA_M5_MODEL") || "",
+        provider: env("AI_PROVIDER") || "nvidia-nim",
+        baseUrl: env("AI_BASE_URL") || env("NVIDIA_BASE_URL") || env("NOVITA_BASE_URL") || "https://integrate.api.nvidia.com/v1",
+        apiKey: env("AI_API_KEY") || env("NVIDIA_API_KEY") || env("NOVITA_API_KEY"),
+        model: env("AI_MODEL") || env("NVIDIA_MODEL") || env("NOVITA_MODEL") || "meta/llama-3.2-11b-vision-instruct",
+        m5Model: env("AI_M5_MODEL") || env("NVIDIA_M5_MODEL") || env("NOVITA_M5_MODEL") || "",
         timeoutMs: num(process.env.AI_TIMEOUT_MS, 45_000),
         m5TimeoutMs: num(process.env.AI_M5_TIMEOUT_MS, 15_000),
         maxRetries: num(process.env.AI_MAX_RETRIES, 1),
@@ -191,16 +191,18 @@ export function loadAppConfig(
 
   // Ensure secrets from process.env are always wired if provided
   if (process.env.BIQUITI_API_KEY) base.biquiti.apiKey = process.env.BIQUITI_API_KEY;
-  if (process.env.NOVITA_API_KEY || process.env.AI_API_KEY) {
-    base.ai.apiKey = process.env.NOVITA_API_KEY || process.env.AI_API_KEY;
+  if (process.env.AI_API_KEY || process.env.NVIDIA_API_KEY || process.env.NOVITA_API_KEY) {
+    base.ai.apiKey = process.env.AI_API_KEY || process.env.NVIDIA_API_KEY || process.env.NOVITA_API_KEY;
   }
   if (process.env.SUPABASE_SERVICE_KEY) base.supabase.serviceKey = process.env.SUPABASE_SERVICE_KEY;
   if (process.env.TELEGRAM_BOT_TOKEN) base.telegram.botToken = process.env.TELEGRAM_BOT_TOKEN;
-
   // Apply explicit overrides if provided
   if (overrides) {
     base = deepMerge(base, overrides);
   }
+
+  // Ensure secrets from process.env are always wired if provided and have the highest priority
+  if (process.env.TELEGRAM_CHAT_ID) base.telegram.chatId = process.env.TELEGRAM_CHAT_ID;
 
   const parsed = AppConfigSchema.safeParse(base);
   if (!parsed.success) {

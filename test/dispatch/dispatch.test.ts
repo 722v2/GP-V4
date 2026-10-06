@@ -177,7 +177,7 @@ function makeBaseConfig(mode: AppConfig["mode"] = "ANALYSIS_ONLY"): AppConfig {
       timeoutMs: 10_000,
     },
     ai: {
-      provider: "novita",
+      provider: "nvidia-nim",
       baseUrl: "",
       apiKey: "test",
       model: "test",
