@@ -1,4 +1,5 @@
 import http from "node:http";
+import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "./config/AppConfig.js";
 import { calculateR, calculateTradeR, type Trade } from "./core/types/Trade.js";
@@ -763,6 +764,11 @@ export function startWebServer(opts: ServerOptions): http.Server {
         let candles = app.cache.get(symbol, timeframe).slice(-limit);
         if (candles.length === 0 && config.fixturesDir) {
           try {
+            if (!fs.existsSync(config.fixturesDir)) {
+              try {
+                fs.mkdirSync(config.fixturesDir, { recursive: true });
+              } catch {}
+            }
             const loaded = await FixtureLoader.loadFromDir(config.fixturesDir);
             if (loaded.candles.length > 0) {
               app.cache.append({ symbol, timeframe, candles: loaded.candles });
@@ -867,6 +873,11 @@ export function startWebServer(opts: ServerOptions): http.Server {
       // 15. API Backtest Runner endpoints (GET /api/backtest, POST /api/backtest/run)
       if (url.pathname === "/api/backtest" || url.pathname === "/api/backtest/run") {
         try {
+          if (config.fixturesDir && !fs.existsSync(config.fixturesDir)) {
+            try {
+              fs.mkdirSync(config.fixturesDir, { recursive: true });
+            } catch {}
+          }
           const { candles } = await FixtureLoader.loadFromDir(config.fixturesDir, {
             symbols: config.symbols,
             timeframes: config.timeframes,
@@ -927,6 +938,11 @@ export function startWebServer(opts: ServerOptions): http.Server {
           return;
         }
         try {
+          if (config.fixturesDir && !fs.existsSync(config.fixturesDir)) {
+            try {
+              fs.mkdirSync(config.fixturesDir, { recursive: true });
+            } catch {}
+          }
           const { candles } = await FixtureLoader.loadFromDir(config.fixturesDir, {
             symbols: config.symbols,
             timeframes: config.timeframes,
